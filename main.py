@@ -689,7 +689,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
 
     print("[+] Bot Lara V5.5 Ultra Started Successfully!")
-    app.run_webhook()
+    app.run_webhook(listen="0.0.0.0", port=int(os.environ.get("PORT", 8080)), webhook_url="https://lara-iecv.onrender.com/" + TOKEN)
 
 if __name__ == "__main__":
     main()
