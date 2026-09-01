@@ -510,7 +510,10 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text(f"📊 **تفاعلك:**\n🎖️ الرتبة: {rank}\n💬 الرسائل: {xp}", parse_mode=None)
 
     if text in ["اكس او", "إكس أو", "إكس او", "xo", "XO"]:
-        return await cmd_xo(update, context) if "cmd_xo" in globals() else await update.message.reply_text("❌⭕ لبدء لعبة إكس أو أرسل: /xo", parse_mode=None)
+        if "cmd_xo" in globals():
+            return await cmd_xo(update, context)
+        else:
+            return await update.message.reply_text("🎮 ميزة الإكس أو تعمل بالأمر الرسمي /xo حالياً.")
 
     if text in ["الالعاب", "الألعاب", "العاب", "العاب البوت"]:
         games_text = "🎮 **قائمة ألعاب بوت لارا:**\n\n❌⭕ **لعبة إكس أو (Tic-Tac-Toe):**\nأرسل `/xo` للبدء مع أصدقائك\n\n🎲 **لعبة النرد والحظ:**\nأرسل `لارا نرد` أو `نرد`\n\n🎯 **لعبة التصويب:**\nأرسل `لارا دارتس`\n\n🎰 **لعبة السلوتس:**\nأرسل `لارا سلوت`"
