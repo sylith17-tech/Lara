@@ -722,3 +722,41 @@ if __name__ == "__main__":
             pass
         except Exception as e:
             time.sleep(3)
+
+from telegram.ext import MessageHandler, filters
+import yt_dlp
+import os
+
+async def auto_download_song(update, context):
+    text = update.message.text
+    if any(word in text for word in ["نزلي", "تحميل", "أغنية", "اغنية"]):
+        query = text.replace("لارا", "").replace("نزلي", "").replace("تحميل", "").replace("أغنية", "").replace("اغنية", "").strip()
+        if not query:
+            return
+            
+        await update.message.reply_text(f"🔍 جاري البحث والتحميل: {query}...")
+        
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'outtmpl': 'song.%(ext)s',
+            'quiet': True
+        }
+        
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.extract_info(f"ytsearch1:{query}", download=True)
+                if os.path.exists("song.mp3"):
+                    with open("song.mp3", 'rb') as audio:
+                        await update.message.reply_audio(audio, caption=f"🎵 إليك طلبك: {query}")
+                    os.remove("song.mp3")
+        except Exception as e:
+            pass
+
+# Add message handler dynamically
+if 'application' in globals():
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_download_song))
