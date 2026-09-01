@@ -779,3 +779,7 @@ if __name__ == '__main__':
     t = threading.Thread(target=run_http_server)
     t.daemon = True
     t.start()
+
+@app.route("/' + os.environ.get('BOT_TOKEN', 'bot') + '", methods=["POST"])
+def webhook():
+    return "OK", 200
