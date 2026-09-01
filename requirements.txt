@@ -2,3 +2,5 @@ pyTelegramBotAPI
 requests
 psutil
 Flask
+
+python-telegram-bot
