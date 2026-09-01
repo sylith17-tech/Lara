@@ -1,37 +1,663 @@
-import os
-from telegram.ext import Application, CommandHandler, ContextTypes
-from flask import Flask, request
-from telegram import Update
+import logging
 import asyncio
+import os
+import glob
+import time
+import platform
+import psutil
+from datetime import datetime
 
-TOKEN = os.environ.get('BOT_TOKEN', '8927003617:AAEyXIlPMr3zjA8M9TWA6znywR9kM4ANWJQ')
-PORT = int(os.environ.get('PORT', 10000))
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions
+)
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
+    ContextTypes, filters, ConversationHandler
+)
+from sqlalchemy import select, func
+from database import init_db, async_session, User, AutoReply, Suggestion
 
-app = Flask(__name__)
-application = Application.builder().token(TOKEN).build()
+# ====================================================
+# --- الإعدادات الأساسية والثوابت ---
+# ====================================================
+BOT_TOKEN = "8927003617:AAEyXlPMr3zjA8M9TWA6znywR9kM4ANWJQ"
+ADMIN_ID = 1880700518
+BOT_START_TIME = time.time()
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('أهلاً بك يا غالي! أنا لارا شغالة وبأتم الاستعداد 🚀✨')
+# -ذاكرة مؤقتة للتخزين المؤقت داخل التشغيل
+USER_WARNS = {}  # {(chat_id, user_id): count}
+USER_XP = {}     # {(chat_id, user_id): xp_points}
 
-application.add_handler(CommandHandler('start', start))
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 
-@app.route(f'/{TOKEN}', methods=['POST'])
-def webhook():
-    if request.method == 'POST':
-        json_data = request.get_json(force=True)
-        update = Update.de_json(json_data, application.bot)
+# نظام تسجيل الحوادث والأمان المضاف خصيصاً لتتبع العمليات
+logger = logging.getLogger("VIP_ARM_SECURITY")
+file_handler = logging.FileHandler("security.log", encoding="utf-8")
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+logger.addHandler(file_handler)
+
+WAIT_TRIGGER, WAIT_RESPONSE, WAIT_BROADCAST, WAIT_SUGGESTION = range(4)
+
+# ====================================================
+# --- محرك تحميل الأغاني الذكي (yt-dlp) ---
+# ====================================================
+def _download_yt_audio(query: str) -> dict:
+    try:
+        import yt_dlp
+        out_pattern = f"/tmp/lara_{asyncio.get_event_loop().time()}"
         
-        async def run_async():
-            await application.initialize()
-            await application.process_update(update)
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': out_pattern + '.%(ext)s',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'noplaylist': True,
+            'quiet': True,
+            'default_search': 'ytsearch1',
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(query, download=True)
+            if 'entries' in info and len(info['entries']) > 0:
+                info = info['entries'][0]
             
-        asyncio.run(run_async())
-        return 'OK', 200
-    return 'OK', 200
+            filepath = out_pattern + ".mp3"
+            if not os.path.exists(filepath):
+                files = glob.glob(out_pattern + ".*")
+                if files:
+                    filepath = files[0]
+            
+            return {
+                'success': True,
+                'filepath': filepath,
+                'title': info.get('title', query),
+                'uploader': info.get('uploader', 'غير معروف'),
+            }
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
 
-@app.route('/')
-def index():
-    return 'Lara Bot is Alive!', 200
+# ====================================================
+# --- نظام مراقبة السيرفر والنظام ---
+# ====================================================
+def get_system_telemetry() -> str:
+    try:
+        uptime_seconds = int(time.time() - BOT_START_TIME)
+        hours, remainder = divmod(uptime_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        uptime_str = f"{hours}h {minutes}m {seconds}s"
+        
+        cpu_usage = psutil.cpu_percent(interval=0.5)
+        ram = psutil.virtual_memory()
+        disk = psutil.disk_usage('/')
+        
+        msg = (
+            f"🖥️ **معلومات Termux/Server (VIP_ARM OS):**\n\n"
+            f"⏱️ **مدة التشغيل (Uptime):** `{uptime_str}`\n"
+            f"💻 **النظام:** `{platform.system()} {platform.release()}`\n"
+            f"⚙️ **استهلاك المعالج (CPU):** `{cpu_usage}%`\n"
+            f"🧠 **الذاكرة العشوائية (RAM):** `{ram.percent}%` ({ram.used // (1024**2)}MB / {ram.total // (1024**2)}MB)\n"
+            f"💾 **المساحة المتبقية:** `{disk.free // (1024**3)} GB` من `{disk.total // (1024**3)} GB`\n"
+            f"⚡ **سرعة الاستجابة:** ممتازة 🚀"
+        )
+        return msg
+    except Exception as e:
+        return f"⚠️ خطأ أثناء جلب معلومات النظام: {e}"
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=PORT)
+# ====================================================
+# --- لوحة المفاتيح والتحكم ---
+# ====================================================
+def get_main_keyboard(bot_username, is_admin):
+    keyboard = [
+        [InlineKeyboardButton("➕ تفعيل البوت بمجموعة", url=f"https://t.me/{bot_username}?startgroup=true")],
+        [InlineKeyboardButton("📜 أوامر الأعضاء", callback_data="cmd_user"), InlineKeyboardButton("👮 أوامر المجموعة", callback_data="cmd_group")],
+        [InlineKeyboardButton("🎮 التسلية والألعاب", callback_data="cmd_games"), InlineKeyboardButton("🛠️ أدوات إضافية", callback_data="cmd_tools")],
+        [InlineKeyboardButton("💡 تقديم مقترح", callback_data="btn_suggest"), InlineKeyboardButton("☕ دعم المطور", callback_data="btn_donate")]
+    ]
+    if is_admin:
+        keyboard.append([InlineKeyboardButton("⚙️ لوحة تحكم المطور (خاص)", callback_data="admin_main")])
+    return InlineKeyboardMarkup(keyboard)
+
+# ====================================================
+# --- الأوامر الأساسية ---
+# ====================================================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    bot_obj = await context.bot.get_me()
+    
+    async with async_session() as session:
+        res = await session.execute(select(User).where(User.telegram_id == user.id))
+        u = res.scalar_one_or_none()
+        if not u:
+            session.add(User(
+                telegram_id=user.id,
+                username=user.username,
+                first_name=user.first_name,
+                is_admin=(user.id == ADMIN_ID)
+            ))
+            await session.commit()
+        elif u.is_banned:
+            await update.message.reply_text("❌ عذراً، تم حظرك من استخدام هذا البوت.")
+            return
+
+    text = (
+        f"🌸 **أهلاً بك يا {user.first_name} في بوت لارا (V5.6 Elite - VIP_ARM)!**\n\n"
+        f"✨ أنا مساعدتك الذكية لإدارة المجموعات، تحميل الأغاني، التسلية، والتحكم بالسيستم والتفاعل الذكي."
+    )
+    reply_markup = get_main_keyboard(bot_obj.username, user.id == ADMIN_ID)
+    
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+    else:
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+
+async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    u = update.effective_user
+    await update.message.reply_text(
+        f"🆔 **معلومات الحساب:**\n"
+        f"👤 **الاسم:** {u.first_name}\n"
+        f"🔗 **المعرف:** @{u.username if u.username else 'غير رائج'}\n"
+        f"🔑 **الايدي:** `{u.id}`",
+        parse_mode="Markdown"
+    )
+
+async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    start_t = time.time()
+    msg = await update.message.reply_text("⚡ جاري قياس السرعة...")
+    end_t = time.time()
+    ping_ms = round((end_t - start_t) * 1000, 2)
+    await msg.edit_text(f"⚡ **سرعة الاستجابة لمعمّ لارا:** `{ping_ms} ms`", parse_mode="Markdown")
+
+async def cmd_calc(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("🔢 **استخدام الآلة الحاسبة:** `/calc 5+5` أو `/calc 10*2`", parse_mode="Markdown")
+        return
+    expr = "".join(context.args)
+    try:
+        allowed = set("0123456789+-*/(). ")
+        if not set(expr).issubset(allowed):
+            raise ValueError("رمز محظور")
+        result = eval(expr)
+        await update.message.reply_text(f"🔢 **النتيجة:** `{result}`", parse_mode="Markdown")
+    except Exception:
+        await update.message.reply_text("⚠️ حدث خطأ أثناء حساب العملية، تأكد من صحة المدخلات.")
+
+async def group_kick(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type not in ['group', 'supergroup']:
+        return
+    member = await context.bot.get_chat_member(update.effective_chat.id, update.effective_user.id)
+    if member.status not in ['administrator', 'creator'] and update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ هذا الأمر للأدمن فقط داخل المجموعة!")
+        return
+    if update.message.reply_to_message:
+        target = update.message.reply_to_message.from_user
+        await context.bot.ban_chat_member(update.effective_chat.id, target.id)
+        await update.message.reply_text(f"🚫 تم طرد **{target.first_name}** بنجاح.", parse_mode="Markdown")
+
+# ====================================================
+# --- نظام توليد الملصقات (Sticker Generator) ---
+# ====================================================
+async def handle_photo_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.caption:
+        return
+    caption = update.message.caption.strip()
+    if caption in ["ركس", "ملصق", "ركسي", "ستيكر"]:
+        photo = update.message.photo[-1]
+        file = await context.bot.get_file(photo.file_id)
+        out_path = f"/tmp/sticker_{update.message.message_id}.webp"
+        await file.download_to_drive(out_path)
+        
+        with open(out_path, 'rb') as sticker_file:
+            await context.bot.send_sticker(chat_id=update.effective_chat.id, sticker=sticker_file, reply_to_message_id=update.message.message_id)
+        
+        if os.path.exists(out_path):
+            os.remove(out_path)
+
+# ====================================================
+# --- الترحيب والتحقق (Captcha) ---
+# ====================================================
+async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    for member in update.message.new_chat_members:
+        if member.id == context.bot.id:
+            await update.message.reply_text("🌸 **أهلاً بك!** شكراً لإضافتي هنا، لا تنسَ إعطائي صلاحيات الإشراف لكي أعلم.")
+            continue
+        
+        captcha_btn = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ اضغط هنا لإثبات أنك بشري", callback_data=f"verify_human_{member.id}")
+        ]])
+        
+        welcome_text = (
+            f"👋 أهلاً بك [{member.first_name}](tg://user?id={member.id}) في المجموعة!\n\n"
+            f"🔒 يرجى الضغط على الزر أدناه لإثبات أنك لست روبوت (تغفلاً من السبام)."
+        )
+        await update.message.reply_text(welcome_text, reply_markup=captcha_btn, parse_mode="Markdown")
+
+# ====================================================
+# --- موجه الأزرار (Button Router) ---
+# ====================================================
+async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    uid = query.from_user.id
+    bot_obj = await context.bot.get_me()
+    
+    back_main = [[InlineKeyboardButton("🔙 عودة للقائمة الرئيسية", callback_data="main_menu")]]
+    back_admin = [[InlineKeyboardButton("🔙 عودة لوحة المطور", callback_data="admin_main")]]
+    
+    if data.startswith("verify_human_"):
+        target_id = int(data.split("_")[2])
+        if uid == target_id:
+            await query.answer("✅ تم إثبات أنك بشري بنجاح.", show_alert=True)
+            await query.message.edit_text(f"✅ تم تأكيد هوية [{query.from_user.first_name}](tg://user?id={uid}) بنجاح.", parse_mode="Markdown")
+        else:
+            await query.answer("⚠️ طف ديجتل وفي قل محكم دزل!", show_alert=True)
+        return
+
+    if data == "main_menu":
+        text = "🌸 **روبوت لارا (V5.6 Elite):**\n\n✨ اختر من القائمة أدناه ما تحتاجه:"
+        await query.message.edit_text(text, reply_markup=get_main_keyboard(bot_obj.username, uid == ADMIN_ID), parse_mode="Markdown")
+
+    elif data == "cmd_user":
+        msg = (
+            "📌 **أوامر المستخدمين العامة:**\n"
+            "• `معلوماتي` - لمعرفة ايدي حسابك والتفاصيل\n"
+            "• `بينج` أو `تست` - لمعرفة سرعة الاستجابة\n"
+            "• `رتبتي` - لمعرفة رتبتك وعدد رسائلك بالمجموعة\n"
+            "• `لارا احكي [نص]` - لتحويل النص إلى صوت بصوت لارا\n"
+            "• `لارا [سؤال]` - للتحدث مع ذكاء لارا الاصطناعي\n"
+            "• `لارا نزلي [اسم الأغنية]` - لتحميل الأغاني بدقة عالية\n"
+            "• `/calc` - آلة حاسبة سريعة\n"
+            "• `/ping` - معرفة سرعة الاتصال بالسيرفر"
+        )
+        await query.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(back_main), parse_mode="Markdown")
+
+    elif data == "cmd_group":
+        msg = (
+            "👮 **أوامر الإدارة والحماية:**\n"
+            "• `طرد` (بالرد) - طرد العضو من المجموعة\n"
+            "• `كتم` أو `اكتمي` (بالرد) - كتم العضو ومنعه من الكتابة\n"
+            "• `فك الكتم` (بالرد) - السماح للعضو بالكتابة مجدداً\n"
+            "• `تحذير` (بالرد) - إعطاء تحذير (عند 3 يتم الكتم تلقائياً)\n"
+            "• `تثبيت` أو `ثبتي` (بالرد) - تثبيت الرسالة أعلى المجموعة\n"
+            "• `قفل المحادثة` / `فتح المحادثة` - للتحكم بكتابة الأعضاء"
+        )
+        await query.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(back_main), parse_mode="Markdown")
+
+    elif data == "cmd_games":
+        keyboard = [
+            [InlineKeyboardButton("🎲 حجر النرد", callback_data="game_dice"), InlineKeyboardButton("🎯 البيوتل", callback_data="game_dart")],
+            [InlineKeyboardButton("🏀 كرة السلة", callback_data="game_basket"), InlineKeyboardButton("⚽ كرة القدم", callback_data="game_football")],
+            [InlineKeyboardButton("🎰 ماكينة الحظ", callback_data="game_slot")],
+            [InlineKeyboardButton("🔙 عودة للرئيسية", callback_data="main_menu")]
+        ]
+        await query.message.edit_text("🎮 **قسم الألعاب والتسلية:**\n\nاختر اللعبة التي تريدها:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    elif data == "game_dice":
+        await context.bot.send_dice(chat_id=query.message.chat_id, emoji="🎲")
+    elif data == "game_dart":
+        await context.bot.send_dice(chat_id=query.message.chat_id, emoji="🎯")
+    elif data == "game_basket":
+        await context.bot.send_dice(chat_id=query.message.chat_id, emoji="🏀")
+    elif data == "game_football":
+        await context.bot.send_dice(chat_id=query.message.chat_id, emoji="⚽")
+    elif data == "game_slot":
+        await context.bot.send_dice(chat_id=query.message.chat_id, emoji="🎰")
+
+    elif data == "cmd_tools":
+        msg = (
+            "🛠️ **أدوات إضافية ومحسنة:**\n"
+            "• `/time` - إظهار الوقت الحالي والتاريخ\n"
+            "• `/calc [المعادلة]` - حاسبة رياضية سريعة\n"
+            "• محول الملصقات - (الرد بكلمة ركس أو ستيكر على أي صورة)"
+        )
+        await query.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(back_main), parse_mode="Markdown")
+
+    elif data == "btn_donate":
+        await query.message.reply_text("💖 شكراً لدعمك المستمر! روبوت لارا عمل وجهد متواصل لتوفير أفضل الخدمات.")
+
+    elif data == "admin_main" and uid == ADMIN_ID:
+        keyboard = [
+            [InlineKeyboardButton("📢 إذاعة للكل", callback_data="adm_broadcast"), InlineKeyboardButton("➕ إضافة رد تلقائي", callback_data="adm_add_reply")],
+            [InlineKeyboardButton("📋 استعراض الردود", callback_data="adm_list_replies"), InlineKeyboardButton("📊 الإحصائيات", callback_data="adm_stats")],
+            [InlineKeyboardButton("🖥️ نظام السيرفر", callback_data="adm_sys_status"), InlineKeyboardButton("💡 المقترحات", callback_data="adm_view_sug")],
+            [InlineKeyboardButton("🔙 عودة للرئيسية", callback_data="main_menu")]
+        ]
+        await query.message.edit_text("⚙️ **لوحة تحكم المطور المحمية (VIP_ARM):**\n\nاختر الإجراء المناسب:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+    elif data == "adm_sys_status" and uid == ADMIN_ID:
+        telemetry = get_system_telemetry()
+        await query.edit_message_text(telemetry, reply_markup=InlineKeyboardMarkup(back_admin), parse_mode="Markdown")
+
+    elif data == "adm_stats" and uid == ADMIN_ID:
+        async with async_session() as session:
+            u_cnt = (await session.execute(select(func.count(User.id)))).scalar()
+            r_cnt = (await session.execute(select(func.count(AutoReply.id)))).scalar()
+            s_cnt = (await session.execute(select(func.count(Suggestion.id)))).scalar()
+        msg = f"📊 **إحصائيات البوت:**\n\n👥 عدد المستخدمين: `{u_cnt}`\n💡 الردود التلقائية: `{r_cnt}`\n📬 المقترحات: `{s_cnt}`"
+        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(back_admin), parse_mode="Markdown")
+
+    elif data == "adm_list_replies" and uid == ADMIN_ID:
+        async with async_session() as session:
+            replies = (await session.execute(select(AutoReply))).scalars().all()
+        txt = "📋 لا توجد ردود بعد." if not replies else "📋 **الردود التلقائية:**\n\n" + "\n".join([f"• `{r.trigger}` -> `{r.response}`" for r in replies])
+        await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(back_admin), parse_mode="Markdown")
+
+    elif data == "adm_view_sug" and uid == ADMIN_ID:
+        async with async_session() as session:
+            sugs = (await session.execute(select(Suggestion))).scalars().all()
+        txt = "💡 لا توجد مقترحات مستلمة بعد." if not sugs else "💡 **المقترحات:**\n\n" + "\n".join([f"• من `{s.user_id}`: {s.text}" for s in sugs])
+        await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(back_admin), parse_mode="Markdown")
+
+# ====================================================
+# --- محادثات الإدارة (Conversation Handlers) ---
+# ====================================================
+async def add_reply_init(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.from_user.id != ADMIN_ID: return ConversationHandler.END
+    await query.message.reply_text("➕ أرسل كلمة المفتاح (الكلمة اللي بدك البوت يرد عليها):", parse_mode="Markdown")
+    return WAIT_TRIGGER
+
+async def add_reply_trig(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['trig'] = update.message.text.strip()
+    await update.message.reply_text("💬 أرسل نص الرد الذي سيتم إرساله عند تفعيل الكلمة:", parse_mode="Markdown")
+    return WAIT_RESPONSE
+
+async def add_reply_resp(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    trig, resp = context.user_data['trig'], update.message.text.strip()
+    async with async_session() as session:
+        session.add(AutoReply(trigger=trig, response=resp))
+        await session.commit()
+    logger.info(f"Admin added auto-reply: {trig} -> {resp}")
+    await update.message.reply_text(f"✅ تم إضافة الرد بنجاح!\n🔑 المفتاح: `{trig}`\n💬 الرد: `{resp}`", parse_mode="Markdown")
+    return ConversationHandler.END
+
+async def suggest_init(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.message.reply_text("💡 أرسل مقترحك الآن، وسيقوم المطور بمراجعته:", parse_mode="Markdown")
+    return WAIT_SUGGESTION
+
+async def suggest_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    txt, uid = update.message.text.strip(), update.effective_user.id
+    async with async_session() as session:
+        session.add(Suggestion(user_id=uid, text=txt))
+        await session.commit()
+    await update.message.reply_text("✅ تم إرسال مقترحك للمطور بنجاح. شكراً لك! 🌸", parse_mode="Markdown")
+    return ConversationHandler.END
+
+async def broadcast_init(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.from_user.id != ADMIN_ID: return ConversationHandler.END
+    await query.message.reply_text("📢 أرسل رسالة الإذاعة الآن (سيتم إرسالها لكل المستخدمين):", parse_mode="Markdown")
+    return WAIT_BROADCAST
+
+async def broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg_text = update.message.text
+    async with async_session() as session:
+        users = (await session.execute(select(User.telegram_id))).scalars().all()
+    count = 0
+    for u_id in users:
+        try:
+            await context.bot.send_message(chat_id=u_id, text=msg_text)
+            count += 1
+            await asyncio.sleep(0.05)
+        except Exception:
+            pass
+    logger.info(f"Broadcast sent by admin to {count} users.")
+    await update.message.reply_text(f"✅ تمت الإذاعة بنجاح إلى `{count}` مستخدم.", parse_mode="Markdown")
+    return ConversationHandler.END
+
+# ====================================================
+# --- موجه الرسائل النصية العام (Message Router) ---
+# ====================================================
+async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text: return
+    text = update.message.text.strip()
+    uid = update.effective_user.id
+    chat_id = update.effective_chat.id
+    is_group = update.effective_chat.type in ['group', 'supergroup']
+    reply_msg = update.message.reply_to_message
+
+    # نظام التفاعل والنقاط (XP System)
+    if is_group:
+        USER_XP[(chat_id, uid)] = USER_XP.get((chat_id, uid), 0) + 1
+
+    # الأوامر النصية المباشرة
+    if text in ["اوامر", "الأوامر", "قائمة الأوامر", "مساعدة", "help"]:
+        full_help_msg = (
+            "📜 **قائمة أوامر بوت لارا (V5.6 Elite):**\n\n"
+            "👤 **أوالاً: قسم الأعضاء والمستخدمين:**\n"
+            "• `معلوماتي` / `ايدي` - عرض معلومات حسابك والايدي\n"
+            "• `بينج` / `تست` - قياس سرعة استجابة البوت\n"
+            "• `رتبتي` - معرفة رتبتك وتفاعلك وعدد رسائلك\n"
+            "• `لارا احكي [نص]` - تحويل النص إلى صوت (TTS)\n"
+            "• `لارا [سؤال]` - التحدث مع المساعد الذكي\n"
+            "• `لارا نزلي [اسم الأغنية]` - تحميل الأغاني عبر yt-dlp\n\n"
+            "👮 **ثانياً: قسم إدارة المجموعات:**\n"
+            "• `طرد` (بالرد) - طرد العضو\n"
+            "• `كتم` / `اكتمي` (بالرد) - كتم العضو ومنعه من الكلام\n"
+            "• `فك الكتم` (بالرد) - السماح للعضو بالكتابة\n"
+            "• `تحذير` (بالرد) - إعطاء تحذير (عند 3 يتم الكتم)\n"
+            "• `ثبتي` / `تثبيت` (بالرد) - تثبيت الرسالة أعلى المجموعة\n"
+            "• `قفل المحادثة` / `فتح المحادثة` - للتحكم بكتابة الأعضاء\n\n"
+            "🎮 **ثالثاً: قسم التسلية للأعضاء:**\n"
+            "اكتب (`حجر النرد`, `البيوتل`, `كرة السلة`, `كرة القدم`, `ماكينة الحظ`)\n\n"
+            "👑 **رابعاً: للمطور الخاص (VIP_ARM):**\n"
+            "• `حالة النظام` / `السيرفر` - مراقبة معالج السيرفر والذاكرة"
+        )
+        return await update.message.reply_text(full_help_msg, parse_mode="Markdown")
+
+    if text in ["معلوماتي", "معلومات", "ايدي", "آيدي", "حسابي"]:
+        return await cmd_id(update, context)
+
+    if text in ["بينج", "سرعة البوت", "تست", "ping"]:
+        return await cmd_ping(update, context)
+
+    if text in ["رتبتي", "نقاطي", "تفاعلي"]:
+        xp = USER_XP.get((chat_id, uid), 1)
+        rank = "عضو متفاعل 🔥" if xp > 50 else ("عضو نشيط ⚡" if xp > 20 else "عضو جديد 🌱")
+        return await update.message.reply_text(f"📊 **بيانات تفاعلك:**\n\n🎖️ **الرتبة:** {rank}\n💬 **عدد الرسائل:** `{xp}` رسالة", parse_mode="Markdown")
+
+    if text in ["حالة النظام", "السيرفر", "النظام", "السيستم"] and uid == ADMIN_ID:
+        telemetry = get_system_telemetry()
+        return await update.message.reply_text(telemetry, parse_mode="Markdown")
+
+    # محرك تحويل النص إلى صوت (TTS)
+    if text.startswith("لارا احكي") or text.startswith("احكي"):
+        speech_text = text.replace("لارا احكي", "").replace("احكي", "").strip()
+        if not speech_text:
+            return await update.message.reply_text("🗣️ اكتب النص بعد الأمر، مثال: `لارا احكي أهلاً بكم`", parse_mode="Markdown")
+        try:
+            from gtts import gTTS
+            tts_path = f"/tmp/tts_{update.message.message_id}.mp3"
+            tts = gTTS(text=speech_text, lang='ar')
+            tts.save(tts_path)
+            with open(tts_path, 'rb') as v_file:
+                await context.bot.send_voice(chat_id=chat_id, voice=v_file, reply_to_message_id=update.message.message_id)
+            if os.path.exists(tts_path): os.remove(tts_path)
+            return
+        except Exception:
+            return await update.message.reply_text(f"🗣️ **لارا تقول:** {speech_text}")
+
+    # محرك الذكاء الاصطناعي والمحادثة (AI Chatbot)
+    if text.startswith("لارا "):
+        query_ai = text.replace("لارا ", "").strip()
+        ai_replies = {
+            "من انت": "أنا لارا، مساعدتك الذكية والمطورة لتسهيل إدارة المجموعات والتحميل والتسلية! 🌸",
+            "كيفك": "أنا بأفضل حال والحمد لله! كيف يمكنني مساعدتك اليوم؟ ✨",
+            "من طورك": "تم تطويري وبرمجتي بواسطة المطور المبدع VIP_ARM ليجعلني البوت الأفضل على تليجرام! 🚀"
+        }
+        for k, v in ai_replies.items():
+            if k in query_ai:
+                return await update.message.reply_text(v)
+        return await update.message.reply_text(f"🤖 **لارا:** مرحباً بك! أنا هنا معك بشأن `{query_ai}`. كيف أستطيع خدمتك بشكل أكبر؟", parse_mode="Markdown")
+
+    # محرك تحميل الأغاني بـ yt-dlp
+    music_triggers = ["لارا ابحثي عن اغنية", "لارا نزلي", "نزلي اغنية", "تحميل اغنية", "نزلي"]
+    is_music_query = any(text.startswith(trig) for trig in music_triggers)
+
+    if is_music_query:
+        query_song = text
+        for trig in music_triggers:
+            query_song = query_song.replace(trig, "")
+        query_song = query_song.strip()
+
+        if not query_song:
+            await update.message.reply_text("🎵 يرجى كتابة اسم الأغنية بعد الأمر، مثال: `لارا نزلي اغنية اصالة`", parse_mode="Markdown")
+            return
+
+        status_msg = await update.message.reply_text(f"⚡ **جاري البحث والتحميل بسرعة فائقة لـ:** `{query_song}`...", parse_mode="Markdown")
+        res = await asyncio.to_thread(_download_yt_audio, query_song)
+
+        if res['success'] and os.path.exists(res['filepath']):
+            try:
+                await status_msg.edit_text("⬆️ **جاري رفع المقطع الصوتي...**", parse_mode="Markdown")
+                with open(res['filepath'], 'rb') as audio_file:
+                    await context.bot.send_audio(
+                        chat_id=chat_id,
+                        audio=audio_file,
+                        title=res['title'],
+                        performer=res['uploader'],
+                        reply_to_message_id=update.message.message_id
+                    )
+                await status_msg.delete()
+            except Exception as e:
+                await status_msg.edit_text(f"⚠️ حدث خطأ أثناء إرسال الملف: {e}")
+            finally:
+                if os.path.exists(res['filepath']):
+                    os.remove(res['filepath'])
+        else:
+            await status_msg.edit_text("❌ لم أتمكن من جلب الأغنية، تأكد من وجود مكتبة `yt-dlp` و `ffmpeg` مثبتة على الجهاز.")
+        return
+
+    # إدارة المجموعات الحصري والحماية
+    if is_group:
+        if text in ["قفل المحادثة", "إغلاق المحادثة", "لارا اقفلي"]:
+            member = await context.bot.get_chat_member(chat_id, uid)
+            if member.status in ['administrator', 'creator'] or uid == ADMIN_ID:
+                await context.bot.set_chat_permissions(chat_id, ChatPermissions(can_send_messages=False))
+                await update.message.reply_text("🔒 تم قفل المحادثة لجميع الأعضاء.")
+            return
+
+        elif text in ["فتح المحادثة", "لارا افتحي"]:
+            member = await context.bot.get_chat_member(chat_id, uid)
+            if member.status in ['administrator', 'creator'] or uid == ADMIN_ID:
+                await context.bot.set_chat_permissions(
+                    chat_id,
+                    ChatPermissions(can_send_messages=True, can_send_audios=True, can_send_documents=True, can_send_photos=True, can_send_videos=True, can_send_other_messages=True)
+                )
+                await update.message.reply_text("🔓 تم فتح المحادثة للجميع.")
+            return
+
+        if reply_msg:
+            target = reply_msg.from_user
+            kick_cmds = ["طرد", "اطردي", "لارا طردي", "لارا اطردي", "طرد العضو"]
+            mute_cmds = ["كتم", "اكتمي", "لارا اكتمي", "لارا كتمي", "تقييد"]
+            unmute_cmds = ["فك الكتم", "الغاء كتم", "إلغاء كتم", "لارا فكي الكتم", "لارا الغاء كتم"]
+            warn_cmds = ["تحذير", "حذري", "لارا حذري", "إعطاء تحذير"]
+            pin_cmds = ["تثبيت", "ثبتي", "لارا ثبتي", "ثبت الرسالة"]
+
+            if any(cmd == text for cmd in kick_cmds + mute_cmds + unmute_cmds + warn_cmds + pin_cmds):
+                member = await context.bot.get_chat_member(chat_id, uid)
+                if member.status not in ['administrator', 'creator'] and uid != ADMIN_ID:
+                    await update.message.reply_text("❌ عذراً، هذا الأمر للأدمن فقط.")
+                    return
+
+                try:
+                    if text in kick_cmds:
+                        await context.bot.ban_chat_member(chat_id, target.id)
+                        await update.message.reply_text(f"🚫 تم طرد **{target.first_name}** بنجاح.", parse_mode="Markdown")
+
+                    elif text in mute_cmds:
+                        await context.bot.restrict_chat_member(chat_id, target.id, permissions=ChatPermissions(can_send_messages=False))
+                        await update.message.reply_text(f"🔇 تم كتم **{target.first_name}** بنجاح.", parse_mode="Markdown")
+
+                    elif text in unmute_cmds:
+                        await context.bot.restrict_chat_member(
+                            chat_id, target.id,
+                            permissions=ChatPermissions(can_send_messages=True, can_send_audios=True, can_send_documents=True, can_send_photos=True, can_send_videos=True, can_send_other_messages=True)
+                        )
+                        await update.message.reply_text(f"🔊 تم إلغاء كتم **{target.first_name}**.", parse_mode="Markdown")
+
+                    elif text in warn_cmds:
+                        w_key = (chat_id, target.id)
+                        USER_WARNS[w_key] = USER_WARNS.get(w_key, 0) + 1
+                        curr_warns = USER_WARNS[w_key]
+                        if curr_warns >= 3:
+                            await context.bot.restrict_chat_member(chat_id, target.id, permissions=ChatPermissions(can_send_messages=False))
+                            USER_WARNS[w_key] = 0
+                            await update.message.reply_text(f"⚠️ وصل العضو **{target.first_name}** لـ 3 تحذيرات! تم كتمه تلقائياً.", parse_mode="Markdown")
+                        else:
+                            await update.message.reply_text(f"⚠️ تم تحذير العضو **{target.first_name}** ({curr_warns}/3).", parse_mode="Markdown")
+
+                    elif text in pin_cmds:
+                        await context.bot.pin_chat_message(chat_id, reply_msg.message_id)
+                        await update.message.reply_text("📌 تم تثبيت الرسالة بنجاح.")
+                except Exception:
+                    await update.message.reply_text("⚠️ لم أتمكن من تنفيذ الأمر، تأكد من صلاحيات البوت كـ Admin.")
+                return
+
+    # الردود التلقائية من قاعدة البيانات
+    async with async_session() as session:
+        res = await session.execute(select(AutoReply).where(AutoReply.trigger == text))
+        reply = res.scalar_one_or_none()
+        if reply:
+            await update.message.reply_text(reply.response)
+
+# ====================================================
+# --- التشغيل الرئيسي والنواة ---
+# ====================================================
+def main():
+    asyncio.run(init_db())
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    reply_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(add_reply_init, pattern="^adm_add_reply$")],
+        states={
+            WAIT_TRIGGER: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_reply_trig)],
+            WAIT_RESPONSE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_reply_resp)]
+        },
+        fallbacks=[], per_message=False
+    )
+
+    sug_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(suggest_init, pattern="^btn_suggest$")],
+        states={WAIT_SUGGESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, suggest_save)]},
+        fallbacks=[], per_message=False
+    )
+
+    broadcast_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(broadcast_init, pattern="^adm_broadcast$")],
+        states={WAIT_BROADCAST: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_send)]},
+        fallbacks=[], per_message=False
+    )
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("id", cmd_id))
+    app.add_handler(CommandHandler("ping", cmd_ping))
+    app.add_handler(CommandHandler.from_callback ? None : CommandHandler("calc", cmd_calc))
+    app.add_handler(CommandHandler("kick", group_kick))
+
+    app.add_handler(reply_conv)
+    app.add_handler(sug_conv)
+    app.add_handler(broadcast_conv)
+
+    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
+    app.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, handle_photo_sticker))
+
+    app.add_handler(CallbackQueryHandler(button_router))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
+
+    print("[+] Bot Lara V5.6 Elite (VIP_ARM Edition) Started Successfully!")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
