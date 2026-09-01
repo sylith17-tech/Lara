@@ -10,3 +10,4 @@ yt-dlp
 gTTS
 
 aiosqlite
+"python-telegram-bot[webhooks]"
