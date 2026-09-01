@@ -219,7 +219,7 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• `رتبتي` - معرفة تفاعلك ورتبتك\n"
             "• `لارا احكي [نص]` - تحويل النص لصوت (TTS)\n"
             "• `لارا [سؤال]` - التحدث مع الذكاء الاصطناعي\n"
-            "• `لارا نزلي [اسم الأغنية]` (أو حملي / بدي غنية) - تحميل فوري للأغاني\n"
+    if "نزلي" in text or "حملي" in text or "بدي غنية" in text:
             "• `/calc` - آلة حاسبة رياضية\n\n"
             "🎭 **أوامر التسلية الجديدة:**\n"
             "• `لارا نسبة الحب بين [الاسم] و [الاسم]`\n"
@@ -477,7 +477,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• `رتبتي` - معرفة تفاعلك وعدد رسائلك\n"
             "• `لارا احكي [نص]` - تحويل النص إلى صوت (TTS)\n"
             "• `لارا [سؤال]` - التحدث مع المساعد الذكي\n"
-            "• `لارا نزلي [اسم الأغنية]` - تحميل الأغاني فورا\n"
+    if "نزلي" in text or "حملي" in text or "بدي غنية" in text:
             "• `لارا نكتة` / `لارا قصف` / `لارا اختراق [بالرد]` - للمتعة\n"
             "• `طرد` / `كتم` / `فك الكتم` / `تحذير` (بالرد للمجموعات)\n"
             "• `قفل المحادثة` / `فتح المحادثة` - للتحكم بالجروب",
@@ -549,7 +549,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text(f"🤖 **لارا:** أنا هنا معك بخصوص `{query_ai}`. أقدر أساعدك بأي شيء تحتاجه!", parse_mode=None)
 
     # --- تنزيل الأغاني ---
-    music_triggers = ["لارا ابحثي عن اغنية", "لارا نزلي", "لارا حملي", "لارا بدي غنية", "نزلي اغنية", "تحميل اغنية", "نزلي", "حملي", "بدي غنية"]
+    if "نزلي" in text or "حملي" in text or "بدي غنية" in text:
     is_music_query = any(text.startswith(trig) for trig in music_triggers)
 
     if is_music_query:
@@ -559,9 +559,9 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         query_song = query_song.strip()
 
         if not query_song:
-            return await update.message.reply_text("🎵 يرجى كتابة اسم الأغنية بعد الأمر، مثل: `لارا نزلي صاصا` أو `لارا بدي غنية ماهر زين`", parse_mode=None)
+    if "نزلي" in text or "حملي" in text or "بدي غنية" in text:
 
-        status_msg = await update.message.reply_text(f"⚡ **جاري جلب الأغنية وتحميلها:** `{query_song}`...", parse_mode=None)
+    if "نزلي" in text or "حملي" in text or "بدي غنية" in text:
         res = await asyncio.to_thread(_download_yt_audio, query_song)
 
         if res['success'] and os.path.exists(res['filepath']):
@@ -575,7 +575,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             finally:
                 if os.path.exists(res['filepath']): os.remove(res['filepath'])
         else:
-            await status_msg.edit_text("❌ لم أتمكن من إيجاد الأغنية، تأكد من اسم الفنان أو الأغنية.")
+    if "نزلي" in text or "حملي" in text or "بدي غنية" in text:
         return
 
     # --- أوامر الإدارة (بالرد) ---
