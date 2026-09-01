@@ -760,3 +760,22 @@ async def auto_download_song(update, context):
 # Add message handler dynamically
 if 'application' in globals():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, auto_download_song))
+
+from flask import Flask
+import threading
+import os
+
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Lara Bot is running smoothly!"
+
+def run_http_server():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+
+if __name__ == '__main__':
+    t = threading.Thread(target=run_http_server)
+    t.daemon = True
+    t.start()
