@@ -782,4 +782,8 @@ if __name__ == '__main__':
 
 @app.route("/' + os.environ.get('BOT_TOKEN', 'bot') + '", methods=["POST"])
 def webhook():
+    from telegram import Update
+    json_data = request.get_json(force=True)
+    update = Update.de_json(json_data, app.bot)
+    app.update_queue.put_nowy(update) if hasattr(app, 'update_queue') else app.loop.run_until_complete(app.process_update(update))
     return "OK", 200
