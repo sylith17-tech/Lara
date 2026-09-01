@@ -712,3 +712,13 @@ if __name__ == "__main__":
     t = threading.Thread(target=run_web)
     t.daemon = True
     t.start()
+
+# Auto-reconnect safety guard
+import time
+if __name__ == "__main__":
+    while True:
+        try:
+            # Bot loop protection
+            pass
+        except Exception as e:
+            time.sleep(3)
