@@ -1,5 +1,5 @@
 import os
-from telegram.ext import Application
+from telegram.ext import Application, CommandHandler, ContextTypes
 from flask import Flask, request
 from telegram import Update
 import asyncio
@@ -9,6 +9,11 @@ PORT = int(os.environ.get('PORT', 10000))
 
 app = Flask(__name__)
 application = Application.builder().token(TOKEN).build()
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text('أهلاً بك يا غالي! أنا لارا شغالة وبأتم الاستعداد 🚀✨')
+
+application.add_handler(CommandHandler('start', start))
 
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
