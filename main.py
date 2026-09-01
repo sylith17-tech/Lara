@@ -1,3 +1,15 @@
+
+import threading, http.server, socketserver, os
+def run_dummy_server():
+    PORT = int(os.environ.get("PORT", 10000))
+    Handler = http.server.SimpleHTTPRequestHandler
+    try:
+        with socketserver.TCPServer(("", PORT), Handler) as httpd:
+            httpd.serve_forever()
+    except:
+        pass
+threading.Thread(target=run_dummy_server, daemon=True).start()
+
 import logging
 import asyncio
 import os
