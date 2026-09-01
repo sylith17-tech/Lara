@@ -8,3 +8,5 @@ python-telegram-bot
 SQLAlchemy
 yt-dlp
 gTTS
+
+aiosqlite
