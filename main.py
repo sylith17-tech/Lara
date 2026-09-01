@@ -480,8 +480,26 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text in ["رتبتي", "نقاطي", "تفاعلي"]:
         xp = USER_XP.get((chat_id, uid), 1)
-        rank = "عضو متفاعل خارق 🔥" if xp > 50 else ("عضو نشيط ⚡" if xp > 20 else "عضو جديد 🌱")
-        return await update.message.reply_text(f"📊 **تفاعلك:**\n🎖️ الرتبة: {rank}\n💬 الرسائل: `{xp}`", parse_mode=None)
+        try:
+            member = await context.bot.get_chat_member(chat_id, uid)
+            st = member.status
+        except Exception:
+            st = "member"
+        if st in ["creator", "owner"]:
+            rank = "مالك المجموعة 👑"
+        elif st == "administrator":
+            rank = "مشرف 🛡️"
+        elif xp > 50:
+            rank = "عضو متفاعل خارق 🔥"
+        elif xp > 20:
+            rank = "عضو نشيط ⚡"
+        else:
+            rank = "عضو جديد 🌱"
+        return await update.message.reply_text(f"📊 **تفاعلك:**\n🎖️ الرتبة: {rank}\n💬 الرسائل: {xp}", parse_mode=None)
+
+    if text in ["الالعاب", "الألعاب", "العاب", "العاب البوت"]:
+        games_text = "🎮 **قائمة ألعاب بوت لارا:**\n\n❌⭕ **لعبة إكس أو (Tic-Tac-Toe):**\nأرسل `/xo` للبدء مع أصدقائك\n\n🎲 **لعبة النرد والحظ:**\nأرسل `لارا نرد` أو `نرد`\n\n🎯 **لعبة التصويب:**\nأرسل `لارا دارتس`\n\n🎰 **لعبة السلوتس:**\nأرسل `لارا سلوت`"
+        return await update.message.reply_text(games_text, parse_mode=None)
 
     if text in ["حالة النظام", "السيرفر", "النظام"] and uid == ADMIN_ID:
         return await update.message.reply_text(get_system_telemetry(), parse_mode=None)
