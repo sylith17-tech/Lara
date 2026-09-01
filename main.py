@@ -689,7 +689,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
 
     print("[+] Bot Lara V5.5 Ultra Started Successfully!")
-    app.run_polling()
+    app.run_webhook()
 
 if __name__ == "__main__":
     main()
