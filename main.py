@@ -562,10 +562,8 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         query_song = query_song.strip()
 
         if not query_song:
-#     if any(k in text for k in ["نزلي", "حملي", "بدي غنية", "اغنية"]):
-
-#     if any(k in text for k in ["نزلي", "حملي", "بدي غنية", "اغنية"]):
-        res = await asyncio.to_thread(_download_yt_audio, query_song)
+            await update.message.reply_text("❌ يرجى كتابة اسم الأغنية بشكل صحيح بعد كلمة نزلي.")
+            return
 
         if res['success'] and os.path.exists(res['filepath']):
             try:
