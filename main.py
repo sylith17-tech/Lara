@@ -576,7 +576,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             finally:
                 if os.path.exists(res['filepath']): os.remove(res['filepath'])
         else:
-#     if any(k in text for k in ["نزلي", "حملي", "بدي غنية", "اغنية"]):
+            pass
         return
 
     # --- أوامر الإدارة (بالرد) ---
