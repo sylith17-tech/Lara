@@ -22,7 +22,7 @@ from database import init_db, async_session, User, AutoReply, Suggestion
 # ====================================================
 # --- الإعدادات الأساسية والثوابت ---
 # ====================================================
-BOT_TOKEN = "8927003617:AAEyXIlPMr3zjA8M9TWA6znywR9kM4ANWJQ"
+BOT_TOKEN = "8927003617:AAHcYjFSWmIW4ZSfIi-frY5cjxaPFnPss2g"
 ADMIN_ID = 1880700518
 BOT_START_TIME = time.time()
 
