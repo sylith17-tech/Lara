@@ -643,7 +643,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("id", cmd_id))
     app.add_handler(CommandHandler("ping", cmd_ping))
-    app.add_handler(CommandHandler.from_callback ? None : CommandHandler("calc", cmd_calc))
+    app.add_handler(CommandHandler("calc", cmd_calc))
     app.add_handler(CommandHandler("kick", group_kick))
 
     app.add_handler(reply_conv)
