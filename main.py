@@ -419,18 +419,6 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_msg = update.message.reply_to_message
 
     if is_group:
-    # --- فلتر الشتائم والحماية الذكي (مضاف حديثاً) ---
-    bad_words = ["شتمة1", "شتمة2"]
-    if update.message and update.message.text:
-        msg_lower = update.message.text.lower()
-        if any(word in msg_lower for word in bad_words):
-            try:
-                await update.message.delete()
-                await update.message.reply_text(f"⚠️ تنبيه: ممنوع استخدام الألفاظ النابية هنا يا {update.message.from_user.first_name}!")
-            except Exception:
-                pass
-            return
-    # --------------------------------------------------
 
     
     # --------------------------------------------------
