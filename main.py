@@ -426,12 +426,13 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if any(word in msg_lower for word in bad_words):
             try:
                 await update.message.delete()
-                await update.message.reply_text(f"⚠️ **تنبيه:** ممنوع استخدام الألفاظ النابية هنا يا {update.message.from_user.first_name}!")
-                admin_report = f"🚨 **رصد لفظ نابٍ:**\n👤 **المستخدم:** {update.message.from_user.first_name}\n💬 **الرسالة:** {update.message.text}"
-                await context.bot.send_message(chat_id=update.effective_chat.id, text=admin_report, parse_mode="Markdown")
+                await update.message.reply_text(f"⚠️ تنبيه: ممنوع استخدام الألفاظ النابية هنا يا {update.message.from_user.first_name}!")
             except Exception:
                 pass
             return
+    # --------------------------------------------------
+
+    
     # --------------------------------------------------
 
     # --- فلتر الشتائم وحماية الإدارة الذكي (مضاف حديثاً) ---
