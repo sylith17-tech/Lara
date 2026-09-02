@@ -411,6 +411,56 @@ async def broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- موجه الرسائل النصية الذكي الشامل ---
 # ====================================================
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # --- نظام إدارة المجموعات الشامل (كتم، طرد، قفل، فلتر) ---
+    if update.effective_chat and update.effective_chat.type in ["group", "supergroup"]:
+        if update.message and update.message.text:
+            txt = update.message.text.strip()
+            
+            # 1. قفل وفتح المحادثة
+            if any(k in txt for k in ["قفل المحادثة", "إغلاق المحادثة", "لارا اقفلي"]):
+                try:
+                    await context.bot.set_chat_permissions(chat_id=update.effective_chat.id, permissions={"can_send_messages": False})
+                    await update.message.reply_text("🔒 تم قفل المحادثة بنجاح.")
+                except Exception:
+                    await update.message.reply_text("⚠️ تأكد أن البوت مشرف ولديه صلاحيات تغيير إعدادات المجموعة.")
+                return
+            elif any(k in txt for k in ["فتح المحادثة", "فتح الجروب", "لارا افتحي"]):
+                try:
+                    await context.bot.set_chat_permissions(chat_id=update.effective_chat.id, permissions={"can_send_messages": True, "can_send_media_messages": True, "can_send_other_messages": True, "can_add_web_page_previews": True})
+                    await update.message.reply_text("🔓 تم فتح المحادثة بنجاح.")
+                except Exception:
+                    await update.message.reply_text("⚠️ تأكد من صلاحيات البوت.")
+                return
+                
+            # 2. كتم وإلغاء كتم بالرد على العضو
+            elif any(k in txt for k in ["كتم", "اكتمي", "كتمي"]) and update.message.reply_to_message:
+                try:
+                    target_user = update.message.reply_to_message.from_user.id
+                    await context.bot.restrict_chat_member(chat_id=update.effective_chat.id, user_id=target_user, permissions={"can_send_messages": False})
+                    await update.message.reply_text("🔇 تم كتم العضو بنجاح.")
+                except Exception:
+                    await update.message.reply_text("⚠️ فشل الكتم: تأكد أن البوت مشرف.")
+                return
+            elif any(k in txt for k in ["فك الكتم", "الغاء كتم", "فكي الكتم"]) and update.message.reply_to_message:
+                try:
+                    target_user = update.message.reply_to_message.from_user.id
+                    await context.bot.restrict_chat_member(chat_id=update.effective_chat.id, user_id=target_user, permissions={"can_send_messages": True, "can_send_media_messages": True, "can_send_other_messages": True})
+                    await update.message.reply_text("🔊 تم إلغاء كتم العضو بنجاح.")
+                except Exception:
+                    await update.message.reply_text("⚠️ فشل إلغاء الكتم.")
+                return
+                
+            # 3. طرد العضو بالرد
+            elif any(k in txt for k in ["طرد", "اطردي", "لارا اطردي"]) and update.message.reply_to_message:
+                try:
+                    target_user = update.message.reply_to_message.from_user.id
+                    await context.bot.ban_chat_member(chat_id=update.effective_chat.id, user_id=target_user)
+                    await update.message.reply_text("🚷 تم طرد العضو بنجاح.")
+                except Exception:
+                    await update.message.reply_text("⚠️ فشل الطرد: تأكد أن البوت مشرف.")
+                return
+    # --------------------------------------------------------
+
     # --- تحسين وتفعيل أوامر الإدارة وفلتر الشتائم ---
     try:
         if await check_bad_words(update, context):
