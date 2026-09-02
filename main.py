@@ -688,3 +688,24 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# --- نظام النبضات للحفاظ على السيرفر نشطاً 24/7 ---
+import threading
+import time
+import urllib.request
+import os
+
+def keep_alive_ping():
+    port = os.environ.get("PORT", 10000)
+    url = f"http://127.0.0.1:{port}"
+    while True:
+        try:
+            urllib.request.urlopen(url)
+        except Exception:
+            pass
+        time.sleep(300) # إرسال نبضة كل 5 دقائق
+
+# بدء خيط النبضات في الخلفية
+threading.Thread(target=keep_alive_ping, daemon=True).start()
+# ----------------------------------------------
