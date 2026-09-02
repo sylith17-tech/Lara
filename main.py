@@ -424,20 +424,6 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --------------------------------------------------
 
     # --- فلتر الشتائم وحماية الإدارة الذكي (مضاف حديثاً) ---
-    bad_words = ["شتمة1", "شتمة2", "كلمة_نابية_1", "كلمة_نابية_2"] # يمكنك إضافة الكلمات هنا
-    if is_group and update.message and update.message.text:
-        msg_lower = update.message.text.lower()
-        if any(word in msg_lower for word in bad_words):
-            try:
-                await update.message.delete()
-                warning_msg = await update.message.reply_text(f"⚠️ **تنبيه إداري:** ممنوع استخدام الألفاظ النابية هنا يا {update.message.from_user.first_name}!")
-                # إرسال تقرير فوري للمشرف / لوحة القيادة
-                admin_report = f"🚨 **تم رصد لفظ نابٍ!**\n👤 **المستخدم:** {update.message.from_user.first_name} (ID: `{update.message.from_user.id}`)\n💬 **الرسالة:** {update.message.text}\n📍 **المجموعة:** {update.effective_chat.title}"
-                # إرسال التقرير في نفس الشات أو كرسالة خاصة (يمكن تعديل المعرف حسب الرغبة)
-                await context.bot.send_message(chat_id=update.effective_chat.id, text=admin_report, parse_mode="Markdown")
-            except Exception as e:
-                pass
-            return
     # --------------------------------------------------
 
         USER_XP[(chat_id, uid)] = USER_XP.get((chat_id, uid), 0) + 1
@@ -730,3 +716,19 @@ def keep_alive_ping():
 # بدء خيط النبضات في الخلفية
 threading.Thread(target=keep_alive_ping, daemon=True).start()
 # ----------------------------------------------
+
+
+# --- دالة فلتر الشتائم المستقلة (آمنة ولا تحذف أي شي) ---
+async def check_bad_words(update, context):
+    if update.effective_chat and update.effective_chat.type in ["group", "supergroup"]:
+        if update.message and update.message.text:
+            bad_words = ["شتمة1", "شتمة2"]
+            msg_lower = update.message.text.lower()
+            if any(w in msg_lower for w in bad_words):
+                try:
+                    await update.message.delete()
+                    await update.message.reply_text(f"⚠️ تنبيه: ممنوع استخدام الألفاظ النابية هنا يا {update.message.from_user.first_name}!")
+                except Exception:
+                    pass
+                return True
+    return False
