@@ -419,6 +419,26 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_msg = update.message.reply_to_message
 
     if is_group:
+    # --- تحسين وتفعيل أوامر الإدارة (مضاف حديثاً) ---
+    if is_group and update.message and update.message.text:
+        txt = update.message.text.strip()
+        # أوامر قفل وفتح المحادثة
+        if txt in ["قفل المحادثة", "إغلاق المحادثة", "لارا اقفلي"]:
+            try:
+                await context.bot.set_chat_permissions(chat_id=update.effective_chat.id, permissions={"can_send_messages": False})
+                await update.message.reply_text("🔒 تم قفل المحادثة بنجاح بواسطة الإدارة.")
+            except Exception as e:
+                await update.message.reply_text(f"⚠️ خطأ بتنفيذ الأمر: تأكد أن البوت مشرف ولديه صلاحيات.")
+            return
+        elif txt in ["فتح المحادثة", "فتح الجروب", "لارا افتحي"]:
+            try:
+                await context.bot.set_chat_permissions(chat_id=update.effective_chat.id, permissions={"can_send_messages": True, "can_send_media_messages": True, "can_send_other_messages": True, "can_add_web_page_previews": True})
+                await update.message.reply_text("🔓 تم فتح المحادثة بنجاح.")
+            except Exception as e:
+                await update.message.reply_text(f"⚠️ خطأ بتنفيذ الأمر: تأكد من صلاحيات البوت.")
+            return
+    # ---------------------------------------------
+
 
     
     # --------------------------------------------------
