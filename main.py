@@ -446,9 +446,8 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_msg = update.message.reply_to_message
 
     if is_group:
-    # --- تحسين وتفعيل أوامر الإدارة (مضاف حديثاً) ---
-    if is_group and update.message and update.message.text:
-        txt = update.message.text.strip()
+        # --- تحسين وتفعيل أوامر الإدارة (مضاف حديثاً) ---
+        txt = update.message.text.strip() if update.message and update.message.text else ""
         # أوامر قفل وفتح المحادثة
         if txt in ["قفل المحادثة", "إغلاق المحادثة", "لارا اقفلي"]:
             try:
