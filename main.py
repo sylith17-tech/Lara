@@ -411,6 +411,28 @@ async def broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- موجه الرسائل النصية الذكي الشامل ---
 # ====================================================
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # --- تفعيل فلتر الشتائم وأوامر الإدارة داخل معالج الرسائل الأساسي ---
+    if await check_bad_words(update, context):
+        return
+    if update.effective_chat and update.effective_chat.type in ["group", "supergroup"]:
+        if update.message and update.message.text:
+            txt = update.message.text.strip()
+            if txt in ["قفل المحادثة", "إغلاق المحادثة", "لارا اقفلي"]:
+                try:
+                    await context.bot.set_chat_permissions(chat_id=update.effective_chat.id, permissions={"can_send_messages": False})
+                    await update.message.reply_text("🔒 تم قفل المحادثة بنجاح بواسطة الإدارة.")
+                except Exception:
+                    await update.message.reply_text("⚠️ تأكد أن البوت مشرف ولديه صلاحيات كاملة.")
+                return
+            elif txt in ["فتح المحادثة", "فتح الجروب", "لارا افتحي"]:
+                try:
+                    await context.bot.set_chat_permissions(chat_id=update.effective_chat.id, permissions={"can_send_messages": True, "can_send_media_messages": True, "can_send_other_messages": True, "can_add_web_page_previews": True})
+                    await update.message.reply_text("🔓 تم فتح المحادثة بنجاح.")
+                except Exception:
+                    await update.message.reply_text("⚠️ تأكد من صلاحيات البوت.")
+                return
+    # -----------------------------------------------------------------
+
     if not update.message or not update.message.text: return
     text = update.message.text.strip()
     uid = update.effective_user.id
