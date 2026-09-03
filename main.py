@@ -203,14 +203,14 @@ async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     start_t = time.time()
     msg = await update.message.reply_text("⚡ جاري قياس السرعة...")
     ping_ms = round((time.time() - start_t) * 1000, 2)
-    await msg.edit_text(f"⚡ **سرعة الاستجابة:** `{ping_ms} ms`", parse_mode="Markdown")
+    await msg.edit_text(f"⚡ **سرعة الاستجابة:** `{ping_ms} ms`", parse_mode=None)
 
 async def cmd_calc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        return await update.message.reply_text("🔢 استخدم: `/calc 5+5`", parse_mode="Markdown")
+        return await update.message.reply_text("🔢 استخدم: `/calc 5+5`", parse_mode=None)
     try:
         res = eval("".join(context.args))
-        await update.message.reply_text(f"🔢 **النتيجة:** `{res}`", parse_mode="Markdown")
+        await update.message.reply_text(f"🔢 **النتيجة:** `{res}`", parse_mode=None)
     except Exception:
         await update.message.reply_text("⚠️ خطأ في المعادلة.")
 
@@ -273,13 +273,13 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🏀 السلة", callback_data="g_basket"), InlineKeyboardButton("⚽ القدم", callback_data="g_football")],
             [InlineKeyboardButton("🔙 عودة للرئيسية", callback_data="main_menu")]
         ]
-        await query.message.edit_text("🎮 **قسم الألعاب والتسلية الخارق:**\n\nاختر لعبتك المفضلة:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        await query.message.edit_text("🎮 **قسم الألعاب والتسلية الخارق:**\n\nاختر لعبتك المفضلة:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
 
     elif data == "start_rps":
         kb = [
             [InlineKeyboardButton("✊ حجرة", callback_data="rps_rock"), InlineKeyboardButton("✋ ورقة", callback_data="rps_paper"), InlineKeyboardButton("✌️ مقص", callback_data="rps_scissors")]
         ]
-        await query.message.edit_text("🎮 **لعبة حجرة ورقة مقص!**\n\nاختر حركتك:", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+        await query.message.edit_text("🎮 **لعبة حجرة ورقة مقص!**\n\nاختر حركتك:", reply_markup=InlineKeyboardMarkup(kb), parse_mode=None)
 
     elif data.startswith("rps_"):
         user_choice = data.split("_")[1]
@@ -301,7 +301,7 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "start_xo":
         await query.message.delete()
         XO_GAMES[chat_id] = {"board": [""] * 9, "turn": "❌", "p1": uid}
-        await context.bot.send_message(chat_id, "🎮 **لعبة إكس أو (XO) بدأت!**\nدور اللاعب: **❌**", reply_markup=get_xo_keyboard(XO_GAMES[chat_id]["board"]), parse_mode="Markdown")
+        await context.bot.send_message(chat_id, "🎮 **لعبة إكس أو (XO) بدأت!**\nدور اللاعب: **❌**", reply_markup=get_xo_keyboard(XO_GAMES[chat_id]["board"]), parse_mode=None)
 
     elif data.startswith("xo_move_"):
         if chat_id not in XO_GAMES:
@@ -337,7 +337,7 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.delete()
         q_data = random.choice(TRIVIA_QUESTIONS)
         TRIVIA_GAMES[chat_id] = {"q": q_data["q"], "a": q_data["a"]}
-        await context.bot.send_message(chat_id, f"🧠 **لعبة الأسئلة الثقافية:**\n\n❓ **السؤال:** {q_data['q']}\n\n*(اكتب الإجابة بالدردشة الآن!)*", parse_mode="Markdown")
+        await context.bot.send_message(chat_id, f"🧠 **لعبة الأسئلة الثقافية:**\n\n❓ **السؤال:** {q_data['q']}\n\n*(اكتب الإجابة بالدردشة الآن!)*", parse_mode=None)
 
     elif data == "g_dice": await context.bot.send_dice(chat_id, emoji="🎲")
     elif data == "g_dart": await context.bot.send_dice(chat_id, emoji="🎯")
@@ -477,10 +477,10 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text.startswith("لارا نسبة الحب"):
         names = text.replace("لارا نسبة الحب", "").strip()
         if not names:
-            return await update.message.reply_text("❤️ اكتبي الاسمين بعد الأمر، مثال:\n`لارا نسبة الحب أحمد ومريم`", parse_mode="Markdown")
+            return await update.message.reply_text("❤️ اكتبي الاسمين بعد الأمر، مثال:\n`لارا نسبة الحب أحمد ومريم`", parse_mode=None)
         love_percent = random.randint(0, 100)
         emoji = "🔥" if love_percent > 80 else ("💖" if love_percent > 50 else "💔")
-        return await update.message.reply_text(f"❤️ **مقياس الحب الدقيق:**\n\nنسبة الحب بين {names} هي: **{love_percent}%** {emoji}", parse_mode="Markdown")
+        return await update.message.reply_text(f"❤️ **مقياس الحب الدقيق:**\n\nنسبة الحب بين {names} هي: **{love_percent}%** {emoji}", parse_mode=None)
 
     if text in ["لارا قصف", "قصف", "اقصفي"]:
         roast = random.choice(ROASTS)
@@ -558,9 +558,9 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         query_song = query_song.strip()
 
         if not query_song:
-            return await update.message.reply_text("❌ يرجى كتابة اسم الأغنية بعد الأمر، مثال:\n`نزلي أصالة`", parse_mode="Markdown")
+            return await update.message.reply_text("❌ يرجى كتابة اسم الأغنية بعد الأمر، مثال:\n`نزلي أصالة`", parse_mode=None)
 
-        status_msg = await update.message.reply_text("🔎 **جاري البحث وتحميل الأغنية...**", parse_mode="Markdown")
+        status_msg = await update.message.reply_text("🔎 **جاري البحث وتحميل الأغنية...**", parse_mode=None)
         res = await asyncio.to_thread(_download_yt_audio, query_song)
 
         if res['success'] and os.path.exists(res['filepath']):
