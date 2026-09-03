@@ -1,25 +1,7 @@
-
-import threading, http.server, socketserver, os
-def run_dummy_server():
-    PORT = int(os.environ.get("PORT", 10000))
-    Handler = http.server.SimpleHTTPRequestHandler
-    try:
-        with socketserver.TCPServer(("", PORT), Handler) as httpd:
-            httpd.serve_forever()
-    except:
-        pass
-threading.Thread(target=run_dummy_server, daemon=True).start()
-
-import logging
-import asyncio
-import os
-import glob
-import time
-import random
-platform_system = __import__('platform').system()
-platform_release = __import__('platform').release()
-import psutil
+import threading, http.server, socketserver, os, logging, asyncio, glob, time, random, urllib.request
 from datetime import datetime
+import platform
+import psutil
 
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions
@@ -32,15 +14,44 @@ from sqlalchemy import select, func
 from database import init_db, async_session, User, AutoReply, Suggestion
 
 # ====================================================
+# --- سيرفر وهمي للعمل على Render ---
+# ====================================================
+def run_dummy_server():
+    PORT = int(os.environ.get("PORT", 10000))
+    Handler = http.server.SimpleHTTPRequestHandler
+    try:
+        with socketserver.TCPServer(("", PORT), Handler) as httpd:
+            httpd.serve_forever()
+    except Exception:
+        pass
+
+threading.Thread(target=run_dummy_server, daemon=True).start()
+
+# ====================================================
+# --- نظام النبضات للحفاظ على السيرفر نشطاً 24/7 ---
+# ====================================================
+def keep_alive_ping():
+    port = os.environ.get("PORT", 10000)
+    url = f"http://127.0.0.1:{port}"
+    while True:
+        try:
+            urllib.request.urlopen(url)
+        except Exception:
+            pass
+        time.sleep(300)
+
+threading.Thread(target=keep_alive_ping, daemon=True).start()
+
+# ====================================================
 # --- الإعدادات الأساسية والثوابت ---
 # ====================================================
 BOT_TOKEN = "8927003617:AAHcYjFSWmIW4ZSfIi-frY5cjxaPFnPss2g"
 ADMIN_ID = 1880700518
 BOT_START_TIME = time.time()
 
-USER_WARNS = {}  # {(chat_id, user_id): count}
-USER_XP = {}     # {(chat_id, user_id): xp_points}
-XO_GAMES = {}    # {chat_id: {"board": [...], "turn": "X", "p1": id, "p2": id}}
+USER_WARNS = {}   # {(chat_id, user_id): count}
+USER_XP = {}      # {(chat_id, user_id): xp_points}
+XO_GAMES = {}     # {chat_id: {"board": [...], "turn": "❌", "p1": id}}
 TRIVIA_GAMES = {} # {chat_id: {"q": str, "a": str}}
 
 logging.basicConfig(
@@ -51,9 +62,6 @@ logger = logging.getLogger("VIP_ARM_LEGENDARY")
 
 WAIT_TRIGGER, WAIT_RESPONSE, WAIT_BROADCAST, WAIT_SUGGESTION = range(4)
 
-# ====================================================
-# --- بيانات التسلية الجديدة المتطورة ---
-# ====================================================
 ROASTS = [
     "يا زلمة لو الغباء يطير كان زمانك قمر صناعي 🛰️😂",
     "وجهك ولا شاشة مكسورة؟ 📱💔",
@@ -69,13 +77,24 @@ JOKES = [
     "مرة أستاذ رياضيات اتجوز مدرسة رياضيات خلفوا ولد سموه شبه منحرف 📐😂"
 ]
 
+TRIVIA_QUESTIONS = [
+    {"q": "ما هي عاصمة أستراليا؟", "a": "كانبيرا"},
+    {"q": "كم عدد سور القرآن الكريم؟", "a": "114"},
+    {"q": "ما هو العنصر الكيميائي الذي يرمز له بـ Au؟", "a": "الذهب"},
+    {"q": "في أي سنة أبحرت سفينة تايتانيك وغرقت؟", "a": "1912"},
+    {"q": "ما هو أسرع حيوان بري في العالم؟", "a": "الفهد"},
+    {"q": "ما هو أكبر كوكب في المجموعة الشمسية؟", "a": "المشتري"},
+    {"q": "من هو النبي الذي لقب بـ كليم الله؟", "a": "موسى"},
+    {"q": "كم عدد كواكب المجموعة الشمسية؟", "a": "8"}
+]
+
 # ====================================================
 # --- محرك تحميل الأغاني الذكي (yt-dlp) ---
 # ====================================================
 def _download_yt_audio(query: str) -> dict:
     try:
         import yt_dlp
-        out_pattern = f"/tmp/lara_{asyncio.get_event_loop().time()}"
+        out_pattern = f"/tmp/lara_{int(time.time() * 1000)}"
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': out_pattern + '.%(ext)s',
@@ -95,7 +114,7 @@ def _download_yt_audio(query: str) -> dict:
         return {'success': False, 'error': str(e)}
 
 # ====================================================
-# --- نظام مراقبة السيرفر ---
+# --- نظام مراقبة السيرفر وفلتر الشتائم ---
 # ====================================================
 def get_system_telemetry() -> str:
     try:
@@ -108,13 +127,27 @@ def get_system_telemetry() -> str:
         return (
             f"🖥️ **معلومات السيستم (VIP_ARM OS v5.9):**\n\n"
             f"⏱️ **التشغيل:** `{hours}h {minutes}m {seconds}s`\n"
-            f"💻 **النظام:** `{platform_system} {platform_release}`\n"
+            f"💻 **النظام:** `{platform.system()} {platform.release()}`\n"
             f"⚙️ **المعالج (CPU):** `{cpu_usage}%`\n"
             f"🧠 **الرام (RAM):** `{ram.percent}%` ({ram.used // (1024**2)}MB)\n"
             f"💾 **المساحة الحرة:** `{disk.free // (1024**3)} GB`"
         )
     except Exception as e:
         return f"⚠️ خطأ جلب الإحصائيات: {e}"
+
+async def check_bad_words(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if update.effective_chat and update.effective_chat.type in ["group", "supergroup"]:
+        if update.message and update.message.text:
+            bad_words = ["شتمة1", "شتمة2"] # أضف الألفاظ غير المرغوبة هنا
+            msg_lower = update.message.text.lower()
+            if any(w in msg_lower for w in bad_words):
+                try:
+                    await update.message.delete()
+                    await update.message.reply_text(f"⚠️ تنبيه: ممنوع استخدام الألفاظ النابية هنا يا {update.message.from_user.first_name}!")
+                except Exception:
+                    pass
+                return True
+    return False
 
 # ====================================================
 # --- أزرار القوائم الأساسية ---
@@ -143,20 +176,6 @@ def get_xo_keyboard(board):
     return InlineKeyboardMarkup(keyboard)
 
 # ====================================================
-# --- نظام الأسئلة والثقافة العامة ---
-# ====================================================
-TRIVIA_QUESTIONS = [
-    {"q": "ما هي عاصمة أستراليا؟", "a": "كانبيرا"},
-    {"q": "كم عدد سور القرآن الكريم؟", "a": "114"},
-    {"q": "ما هو العنصر الكيميائي الذي يرمز له بـ Au؟", "a": "الذهب"},
-    {"q": "في أي سنة أبحرت سفينة تايتانيك وغرقت؟", "a": "1912"},
-    {"q": "ما هي أسرع حيوان بري في العالم؟", "a": "الفهد"},
-    {"q": "ما هو أكبر كوكب في المجموعة الشمسية؟", "a": "المشتري"},
-    {"q": "من هو النبي الذي لقب بـ كليم الله؟", "a": "موسى"},
-    {"q": "كم عدد كواكب المجموعة الشمسية؟", "a": "8"}
-]
-
-# ====================================================
 # --- الأوامر الأساسية ---
 # ====================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -172,28 +191,33 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     markup = get_main_keyboard(bot_obj.username, user.id == ADMIN_ID)
     if update.callback_query:
         await update.callback_query.answer()
-        await update.callback_query.edit_message_text(text, reply_markup=markup, parse_mode=None)
+        await update.callback_query.edit_message_text(text, reply_markup=markup, parse_mode="Markdown")
     else:
-        await update.message.reply_text(text, reply_markup=markup, parse_mode=None)
+        await update.message.reply_text(text, reply_markup=markup, parse_mode="Markdown")
 
 async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
-    await update.message.reply_text(f"🆔 **معلوماتك:**\n👤 الاسم: {u.first_name}\n🔑 الآيدي: `{u.id}`", parse_mode=None)
+    await update.message.reply_text(f"🆔 **معلوماتك:**\n👤 الاسم: {u.first_name}\n🔑 الآيدي: `{u.id}`", parse_mode="Markdown")
 
 async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     start_t = time.time()
     msg = await update.message.reply_text("⚡ جاري قياس السرعة...")
     ping_ms = round((time.time() - start_t) * 1000, 2)
-    await msg.edit_text(f"⚡ **سرعة الاستجابة:** `{ping_ms} ms`", parse_mode=None)
+    await msg.edit_text(f"⚡ **سرعة الاستجابة:** `{ping_ms} ms`", parse_mode="Markdown")
 
 async def cmd_calc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        return await update.message.reply_text("🔢 استخدم: `/calc 5+5`", parse_mode=None)
+        return await update.message.reply_text("🔢 استخدم: `/calc 5+5`", parse_mode="Markdown")
     try:
         res = eval("".join(context.args))
-        await update.message.reply_text(f"🔢 **النتيجة:** `{res}`", parse_mode=None)
-    except:
+        await update.message.reply_text(f"🔢 **النتيجة:** `{res}`", parse_mode="Markdown")
+    except Exception:
         await update.message.reply_text("⚠️ خطأ في المعادلة.")
+
+async def cmd_xo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    XO_GAMES[chat_id] = {"board": [""] * 9, "turn": "❌", "p1": update.effective_user.id}
+    await update.message.reply_text("🎮 **لعبة إكس أو (XO) بدأت!**\nدور اللاعب: **❌**", reply_markup=get_xo_keyboard(XO_GAMES[chat_id]["board"]), parse_mode="Markdown")
 
 # ====================================================
 # --- موجه الأزرار (Button Router) ---
@@ -209,7 +233,7 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "main_menu":
         text = "🌸 **روبوت لارا (V5.9 Legendary):**\n\n✨ اختر من القائمة أدناه:"
-        await query.message.edit_text(text, reply_markup=get_main_keyboard(bot_obj.username, uid == ADMIN_ID), parse_mode=None)
+        await query.message.edit_text(text, reply_markup=get_main_keyboard(bot_obj.username, uid == ADMIN_ID), parse_mode="Markdown")
 
     elif data == "cmd_user":
         msg = (
@@ -219,7 +243,7 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• `رتبتي` - معرفة تفاعلك ورتبتك\n"
             "• `لارا احكي [نص]` - تحويل النص لصوت (TTS)\n"
             "• `لارا [سؤال]` - التحدث مع الذكاء الاصطناعي\n"
-#     if any(k in text for k in ["نزلي", "حملي", "بدي غنية", "اغنية"]):
+            "• `نزلي [اسم الأغنية]` - تحميل وتحويل أغنية MP3\n"
             "• `/calc` - آلة حاسبة رياضية\n\n"
             "🎭 **أوامر التسلية الجديدة:**\n"
             "• `لارا نسبة الحب بين [الاسم] و [الاسم]`\n"
@@ -227,11 +251,11 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• `لارا نكتة` لجرعة ضحك\n"
             "• `لارا اختراق` (بالرد على شخص للمزاح)"
         )
-        await query.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(back_main), parse_mode=None)
+        await query.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(back_main), parse_mode="Markdown")
 
     elif data == "cmd_group":
         msg = (
-            "👮 **أوامر الإدارة والحماية:**\n"
+            "👮 **أوامر الإدارة والحماية (للمشرفين فقط):**\n"
             "• `طرد` (بالرد) - طرد العضو نهائياً\n"
             "• `كتم` (بالرد) - كتم العضو ومنعه من الكلام\n"
             "• `فك الكتم` (بالرد) - السماح للعضو بالكتابة\n"
@@ -239,7 +263,7 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• `ثبتي` (بالرد) - تثبيت الرسالة أعلى المجموعة\n"
             "• `قفل المحادثة` / `فتح المحادثة` - للتحكم بكتابة الأعضاء"
         )
-        await query.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(back_main), parse_mode=None)
+        await query.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(back_main), parse_mode="Markdown")
 
     elif data == "cmd_games":
         keyboard = [
@@ -249,21 +273,19 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🏀 السلة", callback_data="g_basket"), InlineKeyboardButton("⚽ القدم", callback_data="g_football")],
             [InlineKeyboardButton("🔙 عودة للرئيسية", callback_data="main_menu")]
         ]
-        await query.message.edit_text("🎮 **قسم الألعاب والتسلية الخارق:**\n\nاختر لعبتك المفضلة:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        await query.message.edit_text("🎮 **قسم الألعاب والتسلية الخارق:**\n\nاختر لعبتك المفضلة:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
-    # --- ألعاب الأزرار ---
     elif data == "start_rps":
         kb = [
             [InlineKeyboardButton("✊ حجرة", callback_data="rps_rock"), InlineKeyboardButton("✋ ورقة", callback_data="rps_paper"), InlineKeyboardButton("✌️ مقص", callback_data="rps_scissors")]
         ]
-        await query.message.edit_text("🎮 **لعبة حجرة ورقة مقص!**\n\nاختر حركتك:", reply_markup=InlineKeyboardMarkup(kb))
+        await query.message.edit_text("🎮 **لعبة حجرة ورقة مقص!**\n\nاختر حركتك:", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
     elif data.startswith("rps_"):
         user_choice = data.split("_")[1]
         bot_choice = random.choice(["rock", "paper", "scissors"])
-        
         choices_ar = {"rock": "✊ حجرة", "paper": "✋ ورقة", "scissors": "✌️ مقص"}
-        
+
         if user_choice == bot_choice:
             res_txt = "🤝 **تعادل!**"
         elif (user_choice == "rock" and bot_choice == "scissors") or \
@@ -272,20 +294,14 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             res_txt = "🎉 **أنت فزت! مبروك يا وحش**"
         else:
             res_txt = "😂 **أنا فزت! هاردلك**"
-            
+
         final_msg = f"أنت اخترت: {choices_ar[user_choice]}\nلارا اختارت: {choices_ar[bot_choice]}\n\nالنتيجة: {res_txt}"
-        await query.message.edit_text(final_msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 العب مرة تانية", callback_data="start_rps")], [InlineKeyboardButton("🔙 رجوع", callback_data="cmd_games")]]))
+        await query.message.edit_text(final_msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 العب مرة تانية", callback_data="start_rps")], [InlineKeyboardButton("🔙 رجوع", callback_data="cmd_games")]]), parse_mode="Markdown")
 
     elif data == "start_xo":
         await query.message.delete()
         XO_GAMES[chat_id] = {"board": [""] * 9, "turn": "❌", "p1": uid}
-        await context.bot.send_message(chat_id, "🎮 **لعبة إكس أوتش (XO) بدأت!**\nدور اللاعب: **❌**", reply_markup=get_xo_keyboard(XO_GAMES[chat_id]["board"]))
-
-    elif data == "start_trivia":
-        await query.message.delete()
-        q_data = random.choice(TRIVIA_QUESTIONS)
-        TRIVIA_GAMES[chat_id] = {"q": q_data["q"], "a": q_data["a"]}
-        await context.bot.send_message(chat_id, f"🧠 **لعبة الأسئلة الثقافية:**\n\n❓ **السؤال:** {q_data['q']}\n\n*(اكتب الإجابة بالدردشة الآن!)*")
+        await context.bot.send_message(chat_id, "🎮 **لعبة إكس أو (XO) بدأت!**\nدور اللاعب: **❌**", reply_markup=get_xo_keyboard(XO_GAMES[chat_id]["board"]), parse_mode="Markdown")
 
     elif data.startswith("xo_move_"):
         if chat_id not in XO_GAMES:
@@ -303,19 +319,25 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 winner = b[w[0]]
                 break
         if winner:
-            await query.message.edit_text(f"🏆 **انتهت اللعبة وفاز اللاعب {winner}!** 🎉", reply_markup=get_xo_keyboard(b))
+            await query.message.edit_text(f"🏆 **انتهت اللعبة وفاز اللاعب {winner}!** 🎉", reply_markup=get_xo_keyboard(b), parse_mode="Markdown")
             del XO_GAMES[chat_id]
             return
         elif "" not in b:
-            await query.message.edit_text("🤝 **تعادل الفريقان!**", reply_markup=get_xo_keyboard(b))
+            await query.message.edit_text("🤝 **تعادل الفريقان!**", reply_markup=get_xo_keyboard(b), parse_mode="Markdown")
             del XO_GAMES[chat_id]
             return
         game["turn"] = "⭕" if game["turn"] == "❌" else "❌"
-        await query.message.edit_text(f"🎮 **لعبة XO جارية..**\nدور اللاعب: **{game['turn']}**", reply_markup=get_xo_keyboard(b))
+        await query.message.edit_text(f"🎮 **لعبة XO جارية..**\nدور اللاعب: **{game['turn']}**", reply_markup=get_xo_keyboard(b), parse_mode="Markdown")
 
     elif data == "xo_stop":
         if chat_id in XO_GAMES: del XO_GAMES[chat_id]
         await query.message.edit_text("❌ تم إنهاء لعبة XO الحالية.")
+
+    elif data == "start_trivia":
+        await query.message.delete()
+        q_data = random.choice(TRIVIA_QUESTIONS)
+        TRIVIA_GAMES[chat_id] = {"q": q_data["q"], "a": q_data["a"]}
+        await context.bot.send_message(chat_id, f"🧠 **لعبة الأسئلة الثقافية:**\n\n❓ **السؤال:** {q_data['q']}\n\n*(اكتب الإجابة بالدردشة الآن!)*", parse_mode="Markdown")
 
     elif data == "g_dice": await context.bot.send_dice(chat_id, emoji="🎲")
     elif data == "g_dart": await context.bot.send_dice(chat_id, emoji="🎯")
@@ -323,8 +345,8 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "g_football": await context.bot.send_dice(chat_id, emoji="⚽")
 
     elif data == "cmd_tools":
-        msg = "🛠️ **أدوات إضافية:**\n• `/calc` - حساب معادلات\n• محول الملصقات (قريباً)"
-        await query.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(back_main), parse_mode=None)
+        msg = "🛠️ **أدوات إضافية:**\n• `/calc` - حساب معادلات رياضية\n• `نزلي [اسم الأغنية]` - تحميل وسحب الأغاني mp3"
+        await query.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(back_main), parse_mode="Markdown")
 
     elif data == "btn_donate":
         await query.message.reply_text("💖 شكراً لدعمك المطور VIP_ARM! البوت مستمر بفضلكم.")
@@ -335,34 +357,34 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("📊 الإحصائيات", callback_data="adm_stats"), InlineKeyboardButton("🖥️ حالة السيرفر", callback_data="adm_sys_status")],
             [InlineKeyboardButton("🔙 عودة للرئيسية", callback_data="main_menu")]
         ]
-        await query.message.edit_text("⚙️ **لوحة المطور الخاصة (VIP_ARM):**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        await query.message.edit_text("⚙️ **لوحة المطور الخاصة (VIP_ARM):**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
     elif data == "adm_sys_status" and uid == ADMIN_ID:
-        await query.edit_message_text(get_system_telemetry(), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 عودة", callback_data="admin_main")]]), parse_mode=None)
+        await query.edit_message_text(get_system_telemetry(), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 عودة", callback_data="admin_main")]]), parse_mode="Markdown")
 
     elif data == "adm_stats" and uid == ADMIN_ID:
         async with async_session() as session:
             u_cnt = (await session.execute(select(func.count(User.id)))).scalar()
             r_cnt = (await session.execute(select(func.count(AutoReply.id)))).scalar()
-        await query.edit_message_text(f"📊 **الإحصائيات:**\n👥 المستخدمون: `{u_cnt}`\n💡 الردود: `{r_cnt}`", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 عودة", callback_data="admin_main")]]), parse_mode=None)
+        await query.edit_message_text(f"📊 **الإحصائيات:**\n👥 المستخدمون: `{u_cnt}`\n💡 الردود المحفوظة: `{r_cnt}`", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 عودة", callback_data="admin_main")]]), parse_mode="Markdown")
 
 # ====================================================
-# --- محادثات الإدارة الذكية ---
+# --- محادثات الإدارة والمدخلات ---
 # ====================================================
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("↩️ تم الإلغاء والعودة للوضع الطبيعي.", parse_mode=None)
+    await update.message.reply_text("↩️ تم الإلغاء والعودة للوضع الطبيعي.", parse_mode="Markdown")
     return ConversationHandler.END
-# (باقي دوال الإدارة والإذاعة كما هي تماماً في الكود السابق)
+
 async def add_reply_init(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     if query.from_user.id != ADMIN_ID: return ConversationHandler.END
-    await query.message.reply_text("➕ أرسل كلمة المفتاح:\n*(أو /cancel للإلغاء)*", parse_mode=None)
+    await query.message.reply_text("➕ أرسل كلمة المفتاح:\n*(أو /cancel للإلغاء)*", parse_mode="Markdown")
     return WAIT_TRIGGER
 
 async def add_reply_trig(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['trig'] = update.message.text.strip()
-    await update.message.reply_text("💬 أرسل نص الرد:", parse_mode=None)
+    await update.message.reply_text("💬 أرسل نص الرد:", parse_mode="Markdown")
     return WAIT_RESPONSE
 
 async def add_reply_resp(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -370,27 +392,27 @@ async def add_reply_resp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with async_session() as session:
         session.add(AutoReply(trigger=trig, response=resp))
         await session.commit()
-    await update.message.reply_text(f"✅ تم حفظ الرد بنجاح:\n`{trig}` -> `{resp}`", parse_mode=None)
+    await update.message.reply_text(f"✅ تم حفظ الرد بنجاح:\n`{trig}` -> `{resp}`", parse_mode="Markdown")
     return ConversationHandler.END
 
 async def suggest_init(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.message.reply_text("💡 أرسل مقترحك للمطور:\n*(أو /cancel للإلغاء)*", parse_mode=None)
+    await query.message.reply_text("💡 أرسل مقترحك للمطور:\n*(أو /cancel للإلغاء)*", parse_mode="Markdown")
     return WAIT_SUGGESTION
 
 async def suggest_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with async_session() as session:
         session.add(Suggestion(user_id=update.effective_user.id, text=update.message.text.strip()))
         await session.commit()
-    await update.message.reply_text("✅ تم إرسال مقترحك بنجاح. شكراً لك! 🌸", parse_mode=None)
+    await update.message.reply_text("✅ تم إرسال مقترحك بنجاح. شكراً لك! 🌸", parse_mode="Markdown")
     return ConversationHandler.END
 
 async def broadcast_init(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     if query.from_user.id != ADMIN_ID: return ConversationHandler.END
-    await query.message.reply_text("📢 أرسل رسالة الإذاعة للجميع:\n*(أو /cancel للإلغاء)*", parse_mode=None)
+    await query.message.reply_text("📢 أرسل رسالة الإذاعة للجميع:\n*(أو /cancel للإلغاء)*", parse_mode="Markdown")
     return WAIT_BROADCAST
 
 async def broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -403,161 +425,63 @@ async def broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=u_id, text=msg_text)
             count += 1
             await asyncio.sleep(0.04)
-        except: pass
-    await update.message.reply_text(f"✅ تمت الإذاعة إلى `{count}` مستخدم بنجاح.", parse_mode=None)
+        except Exception: pass
+    await update.message.reply_text(f"✅ تمت الإذاعة إلى `{count}` مستخدم بنجاح.", parse_mode="Markdown")
     return ConversationHandler.END
 
 # ====================================================
-# --- موجه الرسائل النصية الذكي الشامل ---
+# --- موجه الرسائل النصية الشامل والآمن ---
 # ====================================================
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # --- نظام إدارة المجموعات الشامل (كتم، طرد، قفل، فلتر) ---
-    if update.effective_chat and update.effective_chat.type in ["group", "supergroup"]:
-        if update.message and update.message.text:
-            txt = update.message.text.strip()
-            
-            # 1. قفل وفتح المحادثة
-            if any(k in txt for k in ["قفل المحادثة", "إغلاق المحادثة", "لارا اقفلي"]):
-                try:
-                    await context.bot.set_chat_permissions(chat_id=update.effective_chat.id, permissions={"can_send_messages": False})
-                    await update.message.reply_text("🔒 تم قفل المحادثة بنجاح.")
-                except Exception:
-                    await update.message.reply_text("⚠️ تأكد أن البوت مشرف ولديه صلاحيات تغيير إعدادات المجموعة.")
-                return
-            elif any(k in txt for k in ["فتح المحادثة", "فتح الجروب", "لارا افتحي"]):
-                try:
-                    await context.bot.set_chat_permissions(chat_id=update.effective_chat.id, permissions={"can_send_messages": True, "can_send_media_messages": True, "can_send_other_messages": True, "can_add_web_page_previews": True})
-                    await update.message.reply_text("🔓 تم فتح المحادثة بنجاح.")
-                except Exception:
-                    await update.message.reply_text("⚠️ تأكد من صلاحيات البوت.")
-                return
-                
-            # 2. كتم وإلغاء كتم بالرد على العضو
-            elif any(k in txt for k in ["كتم", "اكتمي", "كتمي"]) and update.message.reply_to_message:
-                try:
-                    target_user = update.message.reply_to_message.from_user.id
-                    await context.bot.restrict_chat_member(chat_id=update.effective_chat.id, user_id=target_user, permissions={"can_send_messages": False})
-                    await update.message.reply_text("🔇 تم كتم العضو بنجاح.")
-                except Exception:
-                    await update.message.reply_text("⚠️ فشل الكتم: تأكد أن البوت مشرف.")
-                return
-            elif any(k in txt for k in ["فك الكتم", "الغاء كتم", "فكي الكتم"]) and update.message.reply_to_message:
-                try:
-                    target_user = update.message.reply_to_message.from_user.id
-                    await context.bot.restrict_chat_member(chat_id=update.effective_chat.id, user_id=target_user, permissions={"can_send_messages": True, "can_send_media_messages": True, "can_send_other_messages": True})
-                    await update.message.reply_text("🔊 تم إلغاء كتم العضو بنجاح.")
-                except Exception:
-                    await update.message.reply_text("⚠️ فشل إلغاء الكتم.")
-                return
-                
-            # 3. طرد العضو بالرد
-            elif any(k in txt for k in ["طرد", "اطردي", "لارا اطردي"]) and update.message.reply_to_message:
-                try:
-                    target_user = update.message.reply_to_message.from_user.id
-                    await context.bot.ban_chat_member(chat_id=update.effective_chat.id, user_id=target_user)
-                    await update.message.reply_text("🚷 تم طرد العضو بنجاح.")
-                except Exception:
-                    await update.message.reply_text("⚠️ فشل الطرد: تأكد أن البوت مشرف.")
-                return
-    # --------------------------------------------------------
-
-    # --- تحسين وتفعيل أوامر الإدارة وفلتر الشتائم ---
-    try:
-        if await check_bad_words(update, context):
-            return
-    except Exception:
-        pass
-        
-    if update.effective_chat and update.effective_chat.type in ["group", "supergroup"]:
-        if update.message and update.message.text:
-            txt = update.message.text.strip()
-            if txt in ["قفل المحادثة", "إغلاق المحادثة", "لارا اقفلي"]:
-                try:
-                    await context.bot.set_chat_permissions(chat_id=update.effective_chat.id, permissions={"can_send_messages": False})
-                    await update.message.reply_text("🔒 تم قفل المحادثة بنجاح بواسطة الإدارة.")
-                except Exception:
-                    pass
-                return
-            elif txt in ["فتح المحادثة", "فتح الجروب", "لارا افتحي"]:
-                try:
-                    await context.bot.set_chat_permissions(chat_id=update.effective_chat.id, permissions={"can_send_messages": True, "can_send_media_messages": True, "can_send_other_messages": True, "can_add_web_page_previews": True})
-                    await update.message.reply_text("🔓 تم فتح المحادثة بنجاح.")
-                except Exception:
-                    pass
-                return
-    # ---------------------------------------------
-
-
     if not update.message or not update.message.text: return
+
+    # 1. فلتر الكلمات النابية
+    if await check_bad_words(update, context):
+        return
+
     text = update.message.text.strip()
     uid = update.effective_user.id
     chat_id = update.effective_chat.id
     is_group = update.effective_chat.type in ['group', 'supergroup']
     reply_msg = update.message.reply_to_message
 
-    if is_group:
-        # --- تحسين وتفعيل أوامر الإدارة (مضاف حديثاً) ---
-        txt = update.message.text.strip() if update.message and update.message.text else ""
-        # أوامر قفل وفتح المحادثة
-        if txt in ["قفل المحادثة", "إغلاق المحادثة", "لارا اقفلي"]:
-            try:
-                await context.bot.set_chat_permissions(chat_id=update.effective_chat.id, permissions={"can_send_messages": False})
-                await update.message.reply_text("🔒 تم قفل المحادثة بنجاح بواسطة الإدارة.")
-            except Exception as e:
-                await update.message.reply_text(f"⚠️ خطأ بتنفيذ الأمر: تأكد أن البوت مشرف ولديه صلاحيات.")
-            return
-        elif txt in ["فتح المحادثة", "فتح الجروب", "لارا افتحي"]:
-            try:
-                await context.bot.set_chat_permissions(chat_id=update.effective_chat.id, permissions={"can_send_messages": True, "can_send_media_messages": True, "can_send_other_messages": True, "can_add_web_page_previews": True})
-                await update.message.reply_text("🔓 تم فتح المحادثة بنجاح.")
-            except Exception as e:
-                await update.message.reply_text(f"⚠️ خطأ بتنفيذ الأمر: تأكد من صلاحيات البوت.")
-            return
-    # ---------------------------------------------
+    # زيادة النقاط/التفاعل
+    USER_XP[(chat_id, uid)] = USER_XP.get((chat_id, uid), 0) + 1
 
+    # 2. فحص الردود التلقائية المخصصة من قاعدة البيانات أولاً
+    async with async_session() as session:
+        res = await session.execute(select(AutoReply).where(AutoReply.trigger == text))
+        db_reply = res.scalar_one_or_none()
+        if db_reply:
+            return await update.message.reply_text(db_reply.response)
 
-    
-    # --------------------------------------------------
-
-    # --- فلتر الشتائم وحماية الإدارة الذكي (مضاف حديثاً) ---
-    # --------------------------------------------------
-
-        USER_XP[(chat_id, uid)] = USER_XP.get((chat_id, uid), 0) + 1
-
-    # --- استكمال الألعاب القديمة (الأسئلة) ---
+    # 3. الأسئلة الثقافية
     if chat_id in TRIVIA_GAMES:
         correct_ans = TRIVIA_GAMES[chat_id]["a"]
-        if text.strip().lower() == correct_ans.lower():
+        if text.lower() == correct_ans.lower():
             del TRIVIA_GAMES[chat_id]
-            return await update.message.reply_text(f"🎉 **إجابة صحيحة يا [{update.effective_user.first_name}](tg://user?id={uid})!** بطل الألعاب ✨", parse_mode=None)
+            return await update.message.reply_text(f"🎉 **إجابة صحيحة يا [{update.effective_user.first_name}](tg://user?id={uid})!** بطل الألعاب ✨", parse_mode="Markdown")
 
-    # ==========================================
-    # --- قسم التسلية الجديد (تفاعلي جداً) ---
-    # ==========================================
-    
-    # 1. الاختراق الوهمي (تليق بالمطور 😉)
+    # 4. قسم التسلية والترفيه
     if text in ["لارا اختراق", "اختراق"] and reply_msg:
-        hack_msg = await update.message.reply_text(f"💻 **[{update.effective_user.first_name}]** طلب تهيئة بيئة الاختراق...\n\n[▓░░░░░░░░░] 10%", parse_mode=None)
-        await asyncio.sleep(1)
         target_name = reply_msg.from_user.first_name
+        hack_msg = await update.message.reply_text(f"💻 **[{update.effective_user.first_name}]** طلب تهيئة بيئة الاختراق...\n\n[▓░░░░░░░░░] 10%", parse_mode="Markdown")
+        await asyncio.sleep(1)
         fake_ip = f"192.168.{random.randint(1,255)}.{random.randint(1,255)}"
-        await hack_msg.edit_text(f"🔍 جاري البحث عن IP الهدف ({target_name})...\n\n[▓▓▓▓░░░░░░] 40%", parse_mode=None)
+        await hack_msg.edit_text(f"🔍 جاري البحث عن IP الهدف ({target_name})...\n\n[▓▓▓▓░░░░░░] 40%", parse_mode="Markdown")
         await asyncio.sleep(1.2)
-        await hack_msg.edit_text(f"🎯 تم العثور على الهدف!\n🌐 IP: `{fake_ip}`\n🔓 جاري كسر تشفير الحماية...\n\n[▓▓▓▓▓▓▓░░░] 75%", parse_mode=None)
+        await hack_msg.edit_text(f"🎯 تم العثور على الهدف!\n🌐 IP: `{fake_ip}`\n🔓 جاري كسر تشفير الحماية...\n\n[▓▓▓▓▓▓▓░░░] 75%", parse_mode="Markdown")
         await asyncio.sleep(1.5)
-        await hack_msg.edit_text(f"✅ **تم الاختراق بنجاح!** 💀\nتم سحب الصور والملفات من جهاز {target_name}!\n\n*(بمزح بمزح، نظام حماية VIP_ARM أقوى من هيك بكتير 😂)*", parse_mode=None)
-        return
+        return await hack_msg.edit_text(f"✅ **تم الاختراق بنجاح!** 💀\nتم سحب الصور والملفات من جهاز {target_name}!\n\n*(بمزح بمزح، نظام حماية VIP_ARM أقوى من هيك بكتير 😂)*", parse_mode="Markdown")
 
-    # 2. مقياس الحب
     if text.startswith("لارا نسبة الحب"):
         names = text.replace("لارا نسبة الحب", "").strip()
         if not names:
-            return await update.message.reply_text("❤️ اكتبي الاسمين بعد الأمر، مثال:\n`لارا نسبة الحب أحمد ومريم`", parse_mode=None)
+            return await update.message.reply_text("❤️ اكتبي الاسمين بعد الأمر، مثال:\n`لارا نسبة الحب أحمد ومريم`", parse_mode="Markdown")
         love_percent = random.randint(0, 100)
         emoji = "🔥" if love_percent > 80 else ("💖" if love_percent > 50 else "💔")
-        return await update.message.reply_text(f"❤️ **مقياس الحب الدقيق:**\n\nنسبة الحب بين {names} هي: **{love_percent}%** {emoji}", parse_mode=None)
+        return await update.message.reply_text(f"❤️ **مقياس الحب الدقيق:**\n\nنسبة الحب بين {names} هي: **{love_percent}%** {emoji}", parse_mode="Markdown")
 
-    # 3. قصف ونكت
     if text in ["لارا قصف", "قصف", "اقصفي"]:
         roast = random.choice(ROASTS)
         if reply_msg:
@@ -565,26 +489,23 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text(roast)
 
     if text in ["لارا نكتة", "نكتة", "نكت", "لارا نكت"]:
-        joke = random.choice(JOKES)
-        return await update.message.reply_text(f"😂 {joke}")
+        return await update.message.reply_text(f"😂 {random.choice(JOKES)}")
 
-    # ==========================================
-    # --- الأوامر الأساسية القديمة المحفوظة ---
-    # ==========================================
+    # 5. الأوامر العامة والأدوات
     if text in ["اوامر", "الاوامر", "قائمة الأوامر", "مساعدة", "help", "/start"]:
         if text == "/start": return await start(update, context)
         return await update.message.reply_text(
             "📜 **قائمة أوامر بوت لارا (V5.9 Legendary):**\n\n"
-            "• `معلوماتي` - عرض معلومات حسابك والايدي\n"
+            "• `معلوماتي` - عرض معلومات حسابك والآيدي\n"
             "• `تست` / `بينج` - قياس سرعة الاستجابة\n"
             "• `رتبتي` - معرفة تفاعلك وعدد رسائلك\n"
+            "• `نزلي [اسم الأغنية]` - تحميل أغنية mp3\n"
             "• `لارا احكي [نص]` - تحويل النص إلى صوت (TTS)\n"
             "• `لارا [سؤال]` - التحدث مع المساعد الذكي\n"
-#     if any(k in text for k in ["نزلي", "حملي", "بدي غنية", "اغنية"]):
             "• `لارا نكتة` / `لارا قصف` / `لارا اختراق [بالرد]` - للمتعة\n"
             "• `طرد` / `كتم` / `فك الكتم` / `تحذير` (بالرد للمجموعات)\n"
             "• `قفل المحادثة` / `فتح المحادثة` - للتحكم بالجروب",
-            parse_mode=None
+            parse_mode="Markdown"
         )
 
     if text in ["معلوماتي", "معلومات", "ايدي", "آيدي", "حسابي"]:
@@ -600,32 +521,20 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             st = member.status
         except Exception:
             st = "member"
-        if st in ["creator", "owner"]:
-            rank = "مالك المجموعة 👑"
-        elif st == "administrator":
-            rank = "مشرف 🛡️"
-        elif xp > 50:
-            rank = "عضو متفاعل خارق 🔥"
-        elif xp > 20:
-            rank = "عضو نشيط ⚡"
-        else:
-            rank = "عضو جديد 🌱"
-        return await update.message.reply_text(f"📊 **تفاعلك:**\n🎖️ الرتبة: {rank}\n💬 الرسائل: {xp}", parse_mode=None)
+        if st in ["creator", "owner"]: rank = "مالك المجموعة 👑"
+        elif st == "administrator": rank = "مشرف 🛡️"
+        elif xp > 50: rank = "عضو متفاعل خارق 🔥"
+        elif xp > 20: rank = "عضو نشيط ⚡"
+        else: rank = "عضو جديد 🌱"
+        return await update.message.reply_text(f"📊 **تفاعلك:**\n🎖️ الرتبة: {rank}\n💬 الرسائل: {xp}", parse_mode="Markdown")
 
     if text in ["اكس او", "إكس أو", "إكس او", "xo", "XO"]:
-        if "cmd_xo" in globals():
-            return await cmd_xo(update, context)
-        else:
-            return await update.message.reply_text("🎮 ميزة الإكس أو تعمل بالأمر الرسمي /xo حالياً.")
-
-    if text in ["الالعاب", "الألعاب", "العاب", "العاب البوت"]:
-        games_text = "🎮 **قائمة ألعاب بوت لارا:**\n\n❌⭕ **لعبة إكس أو (Tic-Tac-Toe):**\nأرسل `/xo` للبدء مع أصدقائك\n\n🎲 **لعبة النرد والحظ:**\nأرسل `لارا نرد` أو `نرد`\n\n🎯 **لعبة التصويب:**\nأرسل `لارا دارتس`\n\n🎰 **لعبة السلوتس:**\nأرسل `لارا سلوت`"
-        return await update.message.reply_text(games_text, parse_mode=None)
+        return await cmd_xo(update, context)
 
     if text in ["حالة النظام", "السيرفر", "النظام"] and uid == ADMIN_ID:
-        return await update.message.reply_text(get_system_telemetry(), parse_mode=None)
+        return await update.message.reply_text(get_system_telemetry(), parse_mode="Markdown")
 
-    # --- الصوت (TTS) ---
+    # 6. تحويل النص لصوت (TTS)
     if text.startswith("لارا احكي") or text.startswith("احكي"):
         speech_text = text.replace("لارا احكي", "").replace("احكي", "").strip()
         if not speech_text: return await update.message.reply_text("🗣️ اكتب النص بعد الأمر.")
@@ -637,40 +546,26 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_voice(chat_id=chat_id, voice=v_file, reply_to_message_id=update.message.message_id)
             if os.path.exists(tts_path): os.remove(tts_path)
             return
-        except:
+        except Exception:
             return await update.message.reply_text(f"🗣️ **لارا تقول:** {speech_text}")
 
-    # --- الدردشة الذكية ---
-    if text.startswith("لارا "):
-        query_ai = text.replace("لارا ", "").strip()
-        if not query_ai or query_ai in ["نكتة", "نكت", "قصف", "احكي", "اختراق", "نسبة الحب"]: return
-        
-        ai_replies = {
-            "من انت": "أنا لارا، مساعدتك الذكية والمطورة بواسطة المبدع VIP_ARM! 🌸",
-            "كيفك": "بأفضل حال والحمد لله! كيف أساعدك اليوم؟ ✨",
-            "من طورك": "تم برمجتي بواسطة المطور الأسطوري VIP_ARM 🚀"
-        }
-        for k, v in ai_replies.items():
-            if k in query_ai: return await update.message.reply_text(v)
-        return await update.message.reply_text(f"🤖 **لارا:** أنا هنا معك بخصوص `{query_ai}`. أقدر أساعدك بأي شيء تحتاجه!", parse_mode=None)
-
-    # --- تنزيل الأغاني ---
-#     if any(k in text for k in ["نزلي", "حملي", "بدي غنية", "اغنية"]):
-    is_music_query = any(text.startswith(trig) for trig in music_triggers)
-
-    if is_music_query:
+    # 7. تنزيل الأغاني الموسيقية
+    music_triggers = ["نزلي", "حملي", "بدي غنية", "اغنية", "تحميل"]
+    if any(text.startswith(trig) for trig in music_triggers):
         query_song = text
         for trig in music_triggers:
             query_song = query_song.replace(trig, "")
         query_song = query_song.strip()
 
         if not query_song:
-            await update.message.reply_text("❌ يرجى كتابة اسم الأغنية بشكل صحيح بعد كلمة نزلي.")
-            return
+            return await update.message.reply_text("❌ يرجى كتابة اسم الأغنية بعد الأمر، مثال:\n`نزلي أصالة`", parse_mode="Markdown")
+
+        status_msg = await update.message.reply_text("🔎 **جاري البحث وتحميل الأغنية...**", parse_mode="Markdown")
+        res = await asyncio.to_thread(_download_yt_audio, query_song)
 
         if res['success'] and os.path.exists(res['filepath']):
             try:
-                await status_msg.edit_text("⬆️ **جاري رفع الملف الصوتي...**", parse_mode=None)
+                await status_msg.edit_text("⬆️ **جاري رفع الملف الصوتي...**", parse_mode="Markdown")
                 with open(res['filepath'], 'rb') as audio_file:
                     await context.bot.send_audio(chat_id=chat_id, audio=audio_file, title=res['title'], performer=res['uploader'], reply_to_message_id=update.message.message_id)
                 await status_msg.delete()
@@ -679,72 +574,88 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             finally:
                 if os.path.exists(res['filepath']): os.remove(res['filepath'])
         else:
-            pass
+            await status_msg.edit_text(f"❌ فشل تحميل الأغنية: {res.get('error', 'غير متوفرة')}")
         return
 
-    # --- أوامر الإدارة (بالرد) ---
+    # 8. الدردشة الذكية مع لارا
+    if text.startswith("لارا "):
+        query_ai = text.replace("لارا ", "").strip()
+        if not query_ai or query_ai in ["نكتة", "نكت", "قصف", "احكي", "اختراق", "نسبة الحب"]: return
+
+        ai_replies = {
+            "من انت": "أنا لارا، مساعدتك الذكية والمطورة بواسطة المبدع VIP_ARM! 🌸",
+            "كيفك": "بأفضل حال والحمد لله! كيف أساعدك اليوم؟ ✨",
+            "من طورك": "تم برمجتي بواسطة المطور الأسطوري VIP_ARM 🚀"
+        }
+        for k, v in ai_replies.items():
+            if k in query_ai: return await update.message.reply_text(v)
+        return await update.message.reply_text(f"🤖 **لارا:** أنا هنا معك بخصوص `{query_ai}`. أقدر أساعدك بأي شيء تحتاجه!", parse_mode="Markdown")
+
+    # 9. نظام الإدارة المحمي الشامل للمجموعات (خاص بالمشرفين فقط)
     if is_group:
-        if text in ["قفل المحادثة", "إغلاق المحادثة", "لارا اقفلي"]:
+        kick_cmds = ["طرد", "اطردي", "لارا طردي", "لارا اطردي"]
+        mute_cmds = ["كتم", "اكتمي", "لارا اكتمي", "كتمي"]
+        unmute_cmds = ["فك الكتم", "الغاء كتم", "لارا فكي الكتم", "فكي الكتم"]
+        warn_cmds = ["تحذير", "حذري", "لارا حذري"]
+        pin_cmds = ["تثبيت", "ثبتي", "لارا ثبتي"]
+        lock_cmds = ["قفل المحادثة", "إغلاق المحادثة", "لارا اقفلي", "قفل الجروب"]
+        unlock_cmds = ["فتح المحادثة", "فتح الجروب", "لارا افتحي"]
+
+        all_admin_triggers = kick_cmds + mute_cmds + unmute_cmds + warn_cmds + pin_cmds + lock_cmds + unlock_cmds
+
+        if any(text == cmd or text.startswith(cmd) for cmd in all_admin_triggers):
             member = await context.bot.get_chat_member(chat_id, uid)
-            if member.status in ['administrator', 'creator'] or uid == ADMIN_ID:
-                await context.bot.set_chat_permissions(chat_id, ChatPermissions(can_send_messages=False))
-                await update.message.reply_text("🔒 تم قفل المحادثة بنجاح.")
-            return
+            if member.status not in ['administrator', 'creator'] and uid != ADMIN_ID:
+                return await update.message.reply_text("❌ هذا الأمر مخصص للمشرفين فقط!")
 
-        elif text in ["فتح المحادثة", "لارا افتحي"]:
-            member = await context.bot.get_chat_member(chat_id, uid)
-            if member.status in ['administrator', 'creator'] or uid == ADMIN_ID:
-                perms = ChatPermissions(can_send_messages=True, can_send_audios=True, can_send_documents=True, can_send_photos=True, can_send_videos=True, can_send_other_messages=True)
-                await context.bot.set_chat_permissions(chat_id, perms)
-                await update.message.reply_text("🔓 تم فتح المحادثة للجميع.")
-            return
+            if text in lock_cmds:
+                try:
+                    await context.bot.set_chat_permissions(chat_id, ChatPermissions(can_send_messages=False))
+                    await update.message.reply_text("🔒 تم قفل المحادثة بنجاح.")
+                except Exception:
+                    await update.message.reply_text("⚠️ تأكد أن البوت مشرف ولديه صلاحيات التحكم بالمجموعة.")
+                return
 
-        if reply_msg:
-            target = reply_msg.from_user
-            kick_cmds = ["طرد", "اطردي", "لارا طردي", "لارا اطردي"]
-            mute_cmds = ["كتم", "اكتمي", "لارا اكتمي", "كتمي"]
-            unmute_cmds = ["فك الكتم", "الغاء كتم", "لارا فكي الكتم"]
-            warn_cmds = ["تحذير", "حذري", "لارا حذري"]
-            pin_cmds = ["تثبيت", "ثبتي", "لارا ثبتي"]
+            if text in unlock_cmds:
+                try:
+                    perms = ChatPermissions(can_send_messages=True, can_send_audios=True, can_send_documents=True, can_send_photos=True, can_send_videos=True, can_send_other_messages=True)
+                    await context.bot.set_chat_permissions(chat_id, perms)
+                    await update.message.reply_text("🔓 تم فتح المحادثة للجميع.")
+                except Exception:
+                    await update.message.reply_text("⚠️ تأكد من صلاحيات البوت.")
+                return
 
-            if any(cmd == text for cmd in kick_cmds + mute_cmds + unmute_cmds + warn_cmds + pin_cmds):
-                member = await context.bot.get_chat_member(chat_id, uid)
-                if member.status not in ['administrator', 'creator'] and uid != ADMIN_ID:
-                    return await update.message.reply_text("❌ هذا الأمر للأدمن فقط!")
-
+            if reply_msg:
+                target = reply_msg.from_user
                 try:
                     if text in kick_cmds:
                         await context.bot.ban_chat_member(chat_id, target.id)
-                        await update.message.reply_text(f"🚫 تم طرد العضو **{target.first_name}**.", parse_mode=None)
+                        await update.message.reply_text(f"🚫 تم طرد العضو **{target.first_name}**.", parse_mode="Markdown")
                     elif text in mute_cmds:
                         await context.bot.restrict_chat_member(chat_id, target.id, permissions=ChatPermissions(can_send_messages=False))
-                        await update.message.reply_text(f"🔇 تم كتم العضو **{target.first_name}**.", parse_mode=None)
+                        await update.message.reply_text(f"🔇 تم كتم العضو **{target.first_name}**.", parse_mode="Markdown")
                     elif text in unmute_cmds:
                         perms = ChatPermissions(can_send_messages=True, can_send_audios=True, can_send_documents=True, can_send_photos=True, can_send_videos=True, can_send_other_messages=True)
                         await context.bot.restrict_chat_member(chat_id, target.id, permissions=perms)
-                        await update.message.reply_text(f"🔊 تم فك الكتم عن **{target.first_name}**.", parse_mode=None)
+                        await update.message.reply_text(f"🔊 تم فك الكتم عن **{target.first_name}**.", parse_mode="Markdown")
                     elif text in warn_cmds:
                         w_key = (chat_id, target.id)
                         USER_WARNS[w_key] = USER_WARNS.get(w_key, 0) + 1
                         if USER_WARNS[w_key] >= 3:
                             await context.bot.restrict_chat_member(chat_id, target.id, permissions=ChatPermissions(can_send_messages=False))
                             USER_WARNS[w_key] = 0
-                            await update.message.reply_text(f"⚠️ وصل العضو **{target.first_name}** لـ 3 تحذيرات! تم كتمه تلقائياً.", parse_mode=None)
+                            await update.message.reply_text(f"⚠️ وصل العضو **{target.first_name}** لـ 3 تحذيرات! تم كتمه تلقائياً.", parse_mode="Markdown")
                         else:
-                            await update.message.reply_text(f"⚠️ تحذير للعضو **{target.first_name}** (`{USER_WARNS[w_key]}/3`).", parse_mode=None)
+                            await update.message.reply_text(f"⚠️ تحذير للعضو **{target.first_name}** (`{USER_WARNS[w_key]}/3`).", parse_mode="Markdown")
                     elif text in pin_cmds:
                         await context.bot.pin_chat_message(chat_id, reply_msg.message_id)
                         await update.message.reply_text("📌 تم تثبيت الرسالة بنجاح.")
-                except:
-                    await update.message.reply_text("⚠️ تأكد من رفع البوت كأدمن بالمجموعة بصلاحيات كاملة.")
+                except Exception:
+                    await update.message.reply_text("⚠️ فشل تنفيذ الأمر: تأكد من رفع البوت كأدمن بالمجموعة وإعطائه الصلاحيات الكاملة.")
                 return
-
-    # --- الردود التلقائية من قاعدة البيانات ---
-    async with async_session() as session:
-        res = await session.execute(select(AutoReply).where(AutoReply.trigger == text))
-        reply = res.scalar_one_or_none()
-        if reply:
-            await update.message.reply_text(reply.response)
+            else:
+                if text in kick_cmds + mute_cmds + unmute_cmds + warn_cmds + pin_cmds:
+                    return await update.message.reply_text("⚠️ يرجى استخدام هذا الأمر بالرد على رسالة العضو المطلوب!")
 
 # ====================================================
 # --- التشغيل والنواة الأساسية ---
@@ -759,23 +670,29 @@ def main():
             WAIT_TRIGGER: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_reply_trig)],
             WAIT_RESPONSE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_reply_resp)]
         },
-        fallbacks=[CommandHandler("cancel", cancel_conversation), MessageHandler(filters.COMMAND, cancel_conversation)], per_message=False
+        fallbacks=[CommandHandler("cancel", cancel_conversation), MessageHandler(filters.COMMAND, cancel_conversation)],
+        per_message=False
     )
+
     sug_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(suggest_init, pattern="^btn_suggest$")],
         states={WAIT_SUGGESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, suggest_save)]},
-        fallbacks=[CommandHandler("cancel", cancel_conversation), MessageHandler(filters.COMMAND, cancel_conversation)], per_message=False
+        fallbacks=[CommandHandler("cancel", cancel_conversation), MessageHandler(filters.COMMAND, cancel_conversation)],
+        per_message=False
     )
+
     broadcast_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(broadcast_init, pattern="^adm_broadcast$")],
         states={WAIT_BROADCAST: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_send)]},
-        fallbacks=[CommandHandler("cancel", cancel_conversation), MessageHandler(filters.COMMAND, cancel_conversation)], per_message=False
+        fallbacks=[CommandHandler("cancel", cancel_conversation), MessageHandler(filters.COMMAND, cancel_conversation)],
+        per_message=False
     )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("id", cmd_id))
     app.add_handler(CommandHandler("ping", cmd_ping))
     app.add_handler(CommandHandler("calc", cmd_calc))
+    app.add_handler(CommandHandler("xo", cmd_xo))
 
     app.add_handler(reply_conv)
     app.add_handler(sug_conv)
@@ -785,46 +702,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
 
     print("[+] Bot Lara V5.9 Legendary (VIP_ARM Edition) Started Successfully!")
-    
-    # ضمان التشغيل النظيف بدون أخطاء التعارض على Render
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
-
-
-# --- نظام النبضات للحفاظ على السيرفر نشطاً 24/7 ---
-import threading
-import time
-import urllib.request
-import os
-
-def keep_alive_ping():
-    port = os.environ.get("PORT", 10000)
-    url = f"http://127.0.0.1:{port}"
-    while True:
-        try:
-            urllib.request.urlopen(url)
-        except Exception:
-            pass
-        time.sleep(300) # إرسال نبضة كل 5 دقائق
-
-# بدء خيط النبضات في الخلفية
-threading.Thread(target=keep_alive_ping, daemon=True).start()
-# ----------------------------------------------
-
-
-# --- دالة فلتر الشتائم المستقلة (آمنة ولا تحذف أي شي) ---
-async def check_bad_words(update, context):
-    if update.effective_chat and update.effective_chat.type in ["group", "supergroup"]:
-        if update.message and update.message.text:
-            bad_words = ["شتمة1", "شتمة2"]
-            msg_lower = update.message.text.lower()
-            if any(w in msg_lower for w in bad_words):
-                try:
-                    await update.message.delete()
-                    await update.message.reply_text(f"⚠️ تنبيه: ممنوع استخدام الألفاظ النابية هنا يا {update.message.from_user.first_name}!")
-                except Exception:
-                    pass
-                return True
-    return False
