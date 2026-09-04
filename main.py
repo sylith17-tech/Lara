@@ -599,8 +599,8 @@ async def get_user_role_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if is_owner:
         text = (
-            "👑 **أهلاً بك يا مالك البوت العظيم (VIP_ARM)!**\n\n"
-            "🛠️ **لوحة التحكم العليا للخدمات والاشتراكات:**\n"
+            "👑 👑 أهلاً بك يا مالك البوت العظيم (VIP_ARM)!\n\n"
+            "🛠️ 🛠️ لوحة التحكم العليا للخدمات والاشتراكات:\n"
             "• يمكنك متابعة المجموعات وإدارة الاشتراكات.\n"
             "• الوصول إلى كافة أدوات المطور والتحكم الكامل."
         )
@@ -611,7 +611,7 @@ async def get_user_role_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
         ]
     elif is_admin:
         text = (
-            f"👮 **أهلاً بك عزيزي المشرف ({update.effective_user.first_name})!**\n\n"
+            f"👮 👮 أهلاً بك عزيزي المشرف ({update.effective_user.first_name})!**\n\n"
             "إليك أدوات وحزم إدارة المجموعة المتاحة لك:"
         )
         keyboard = [
@@ -620,7 +620,7 @@ async def get_user_role_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
         ]
     else:
         text = (
-            f"👋 **أهلاً بك ({update.effective_user.first_name}) في البوت!**\n\n"
+            f"👋 👋 أهلاً بك ({update.effective_user.first_name}) في البوت!**\n\n"
             "إليك قائمة الخدمات والترفيه المتاحة لاستخدامك:"
         )
         keyboard = [
@@ -654,7 +654,7 @@ async def handle_owner_subs_callback(update: Update, context: ContextTypes.DEFAU
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message and update.message.text in ["الاوامر", "/help", "الأوامر"]:
         text, reply_markup = await get_user_role_menu(update, context)
-        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode=None)
         return
 
     if await handle_purge_commands(update, context):
