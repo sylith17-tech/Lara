@@ -254,6 +254,8 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await query.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(back_main), parse_mode=None)
 
+    elif data == "owner_subs":
+        await handle_owner_subs_callback(update, context)
     elif data == "cmd_group":
         msg = """👮 **دليل أوامر إدارة المجموعة (VIP_ARM Edition):**
 
@@ -577,7 +579,84 @@ async def check_media_locks(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 pass
     return False
 
+
+async def get_user_role_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    chat_type = update.effective_chat.type
+    
+    # Check if Owner
+    is_owner = (user_id == ADMIN_ID)
+    
+    # Check if Group Admin
+    is_admin = False
+    if chat_type in ["group", "supergroup"]:
+        try:
+            member = await context.bot.get_chat_member(chat_id, user_id)
+            is_admin = member.status in ["administrator", "creator"]
+        except Exception:
+            pass
+
+    if is_owner:
+        text = (
+            "👑 **أهلاً بك يا مالك البوت العظيم (VIP_ARM)!**\n\n"
+            "🛠️ **لوحة التحكم العليا للخدمات والاشتراكات:**\n"
+            "• يمكنك متابعة المجموعات وإدارة الاشتراكات.\n"
+            "• الوصول إلى كافة أدوات المطور والتحكم الكامل."
+        )
+        keyboard = [
+            [InlineKeyboardButton("📊 إدارة المجموعات والاشتراكات", callback_data="owner_subs")],
+            [InlineKeyboardButton("👮 أوامر الإدارة", callback_data="cmd_group"), InlineKeyboardButton("🎮 الألعاب والترفيه", callback_data="cmd_games")],
+            [InlineKeyboardButton("🎵 التحميل والخدمات", callback_data="cmd_services"), InlineKeyboardButton("📝 الملاحظات والذكاء", callback_data="cmd_ai")]
+        ]
+    elif is_admin:
+        text = (
+            f"👮 **أهلاً بك عزيزي المشرف ({update.effective_user.first_name})!**\n\n"
+            "إليك أدوات وحزم إدارة المجموعة المتاحة لك:"
+        )
+        keyboard = [
+            [InlineKeyboardButton("👮 أوامر الإدارة والحماية", callback_data="cmd_group")],
+            [InlineKeyboardButton("🎮 الألعاب والترفيه", callback_data="cmd_games"), InlineKeyboardButton("🎵 الخدمات العامة", callback_data="cmd_services")]
+        ]
+    else:
+        text = (
+            f"👋 **أهلاً بك ({update.effective_user.first_name}) في البوت!**\n\n"
+            "إليك قائمة الخدمات والترفيه المتاحة لاستخدامك:"
+        )
+        keyboard = [
+            [InlineKeyboardButton("🎮 الألعاب", callback_data="cmd_games"), InlineKeyboardButton("🎵 التحميل والخدمات", callback_data="cmd_services")],
+            [InlineKeyboardButton("📝 الملاحظات والذكاء الاصطناعي", callback_data="cmd_ai")]
+        ]
+        
+    return text, InlineKeyboardMarkup(keyboard)
+
+async def handle_owner_subs_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID:
+        await query.answer("⚠️ هذه اللوحة مخصصة لمالك البوت فقط!", show_alert=True)
+        return
+        
+    async with async_session() as session:
+        res = await session.execute(select(GroupSettings))
+        groups = res.scalars().all()
+        
+    msg = "📊 **قائمة المجموعات والاشتراكات النشطة:**\n\n"
+    if not groups:
+        msg += "لا توجد مجموعات مسجلة حالياً في قاعدة البيانات."
+    else:
+        for g in groups:
+            status = "🟢 نشط" if getattr(g, "is_subscribed", True) else "🔴 ملغى"
+            msg += f"• مجموعة ID: `{g.chat_id}` | الحالة: {status}\n"
+            
+    keyboard = [[InlineKeyboardButton("🔙 العودة للرئيسية", callback_data="main_menu")]]
+    await query.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message and update.message.text in ["الاوامر", "/help", "الأوامر"]:
+        text, reply_markup = await get_user_role_menu(update, context)
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+        return
+
     if await handle_purge_commands(update, context):
         return
     if await handle_lock_toggle_commands(update, context):

@@ -46,6 +46,7 @@ class GroupSettings(Base):
     lock_links: Mapped[bool] = mapped_column(Boolean, default=False)
     lock_stickers: Mapped[bool] = mapped_column(Boolean, default=False)
     lock_voice: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_subscribed: Mapped[bool] = mapped_column(Boolean, default=True)
 
 async def init_db():
     async with engine.begin() as conn:
