@@ -181,6 +181,9 @@ def get_xo_keyboard(board):
 # ====================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    if not await is_subscribed(user.id, context):
+        await send_sub_prompt(update, context)
+        return
     bot_obj = await context.bot.get_me()
     async with async_session() as session:
         res = await session.execute(select(User).where(User.telegram_id == user.id))
