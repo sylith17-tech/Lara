@@ -253,7 +253,15 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• `لارا اختراق` (بالرد على شخص للمزاح)"
         )
         await query.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(back_main), parse_mode=None)
-
+    elif data == "check_sub":
+        if await is_subscribed(query.from_user.id, context):
+            await query.answer("✅ تم التحقق! أنت مشترك بالفعل، يمكنك استخدام البوت الآن.", show_alert=True)
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+        else:
+            await query.answer("❌ لم تشترك في القناة بعد! يرجى الاشتراك أولاً.", show_alert=True)
     elif data == "owner_subs":
         await handle_owner_subs_callback(update, context)
     elif data == "cmd_group":
@@ -276,6 +284,7 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • `كتم` / `الغاء الكتم`
 • `طرد` | `تحذير` | `تثبيت`"""
         await query.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(back_main), parse_mode=None)
+
 
     elif data == "cmd_games":
         keyboard = [
@@ -580,6 +589,34 @@ async def check_media_locks(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return False
 
 
+
+CHANNEL_USERNAME = "@VIP_ARM0"
+CHANNEL_URL = "https://t.me/VIP_ARM0"
+
+async def is_subscribed(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if user_id == ADMIN_ID:
+        return True
+    try:
+        member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
+        return member.status in ["creator", "administrator", "member"]
+    except Exception:
+        return True
+
+async def send_sub_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = """⚠️ عذراً عزيزي، يجب عليك الاشتراك في قناة البوت أولاً لاستخدامه!
+
+📢 القناة: @VIP_ARM0
+
+اشترك بالقناة ثم اضغط على زر (تحقق من الاشتراك) بالأسفل."""
+    keyboard = [
+        [InlineKeyboardButton("📢 رابط القناة", url=CHANNEL_URL)],
+        [InlineKeyboardButton("🔄 تحقق من الاشتراك", callback_data="check_sub")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    if update.message:
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode=None)
+    elif update.callback_query:
+        await update.callback_query.message.reply_text(text, reply_markup=reply_markup, parse_mode=None)
 async def get_user_role_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
@@ -652,6 +689,11 @@ async def handle_owner_subs_callback(update: Update, context: ContextTypes.DEFAU
     await query.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id if update.effective_user else None
+    if user_id and not await is_subscribed(user_id, context):
+        await send_sub_prompt(update, context)
+        return
+
     if update.message and update.message.text in ["الاوامر", "/help", "الأوامر"]:
         text, reply_markup = await get_user_role_menu(update, context)
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode=None)
