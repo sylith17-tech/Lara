@@ -11,7 +11,7 @@ from telegram.ext import (
     ContextTypes, filters, ConversationHandler
 )
 from sqlalchemy import select, func
-from database import init_db, async_session, User, AutoReply, Suggestion
+from database import GroupSettings, init_db, async_session, User, AutoReply, Suggestion
 
 # ====================================================
 # --- سيرفر وهمي للعمل على Render ---
@@ -255,15 +255,24 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(back_main), parse_mode=None)
 
     elif data == "cmd_group":
-        msg = (
-            "👮 **أوامر الإدارة والحماية (للمشرفين فقط):**\n"
-            "• `طرد` (بالرد) - طرد العضو نهائياً\n"
-            "• `كتم` (بالرد) - كتم العضو ومنعه من الكلام\n"
-            "• `فك الكتم` (بالرد) - السماح للعضو بالكتابة\n"
-            "• `تحذير` (بالرد) - إعطاء تحذير (عند 3 يتم الكتم تلقائياً)\n"
-            "• `ثبتي` (بالرد) - تثبيت الرسالة أعلى المجموعة\n"
-            "• `قفل المحادثة` / `فتح المحادثة` - للتحكم بكتابة الأعضاء"
-        )
+        msg = """👮 **دليل أوامر إدارة المجموعة (VIP_ARM Edition):**
+
+🧹 **1. الحذف والتطهير:**
+• `مسح 10` : مسح آخر 10 رسائل (من 1 إلى 100).
+• `تنظيف الصور` : مسح الصور الأخيرة في المجموعه.
+• `مسح` (بالرد) : مسح الرسالة المحددة.
+
+🔒 **2. قفل وفتح الوسائط:**
+• `قفل الصور` / `فتح الصور`
+• `قفل الفيديو` / `فتح الفيديو`
+• `قفل الروابط` / `فتح الروابط`
+• `قفل الملصقات` / `فتح الملصقات`
+• `قفل الصوتيات` / `فتح الصوتيات`
+
+🔨 **3. العقوبات والتحكم (بالرد):**
+• `حظر` / `الغاء الحظر`
+• `كتم` / `الغاء الكتم`
+• `طرد` | `تحذير` | `تثبيت`"""
         await query.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(back_main), parse_mode=None)
 
     elif data == "cmd_games":
@@ -433,7 +442,149 @@ async def broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ====================================================
 # --- موجه الرسائل النصية الشامل والآمن ---
 # ====================================================
+
+async def is_user_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if update.effective_chat.type in ["group", "supergroup"]:
+        member = await context.bot.get_chat_member(update.effective_chat.id, update.effective_user.id)
+        return member.status in ["administrator", "creator"]
+    return True
+
+async def handle_purge_commands(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if not update.message or not update.message.text:
+        return False
+    
+    text = update.message.text.strip()
+    chat_id = update.effective_chat.id
+    
+    # Check if command is purge
+    if text.startswith("مسح ") or text == "مسح":
+        if not await is_user_admin(update, context):
+            await update.message.reply_text("⚠️ هذا الأمر مخصص للمشرفين فقط!")
+            return True
+            
+        try:
+            parts = text.split()
+            count = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
+            count = min(max(count, 1), 100) # Limit between 1 and 100
+            
+            current_msg_id = update.message.message_id
+            deleted_count = 0
+            
+            for m_id in range(current_msg_id, current_msg_id - count - 1, -1):
+                try:
+                    await context.bot.delete_message(chat_id=chat_id, message_id=m_id)
+                    deleted_count += 1
+                except Exception:
+                    pass
+            
+            status_msg = await context.bot.send_message(chat_id=chat_id, text=f"🧹 تم مسح {deleted_count} رسالة بنجاح.")
+            await asyncio.sleep(3)
+            await status_msg.delete()
+            return True
+        except Exception as e:
+            return False
+
+    elif text == "تنظيف الصور":
+        if not await is_user_admin(update, context):
+            await update.message.reply_text("⚠️ هذا الأمر مخصص للمشرفين فقط!")
+            return True
+            
+        current_msg_id = update.message.message_id
+        await update.message.delete()
+        # Clean recent potential photo messages
+        for m_id in range(current_msg_id - 1, current_msg_id - 30, -1):
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=m_id)
+            except Exception:
+                pass
+        return True
+        
+    return False
+
+
+async def handle_lock_toggle_commands(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if not update.message or not update.message.text:
+        return False
+    
+    text = update.message.text.strip()
+    chat_id = update.effective_chat.id
+    
+    lock_map = {
+        "قفل الصور": ("lock_photos", True, "🔒 تم قفل الصور بنجاح."),
+        "فتح الصور": ("lock_photos", False, "🔓 تم فتح الصور بنجاح."),
+        "قفل الفيديو": ("lock_videos", True, "🔒 تم قفل الفيديو بنجاح."),
+        "فتح الفيديو": ("lock_videos", False, "🔓 تم فتح الفيديو بنجاح."),
+        "قفل الروابط": ("lock_links", True, "🔒 تم قفل الروابط والإعلانات بنجاح."),
+        "فتح الروابط": ("lock_links", False, "🔓 تم فتح الروابط للإعضاء."),
+        "قفل الملصقات": ("lock_stickers", True, "🔒 تم قفل الملصقات والأنيميشن."),
+        "فتح الملصقات": ("lock_stickers", False, "🔓 تم فتح الملصقات."),
+        "قفل الصوتيات": ("lock_voice", True, "🔒 تم قفل البصمات والصوتيات."),
+        "فتح الصوتيات": ("lock_voice", False, "🔓 تم فتح الصوتيات.")
+    }
+    
+    if text in lock_map:
+        if not await is_user_admin(update, context):
+            await update.message.reply_text("⚠️ هذا الأمر مخصص للمشرفين فقط!")
+            return True
+            
+        attr, val, msg = lock_map[text]
+        async with async_session() as session:
+            res = await session.execute(select(GroupSettings).where(GroupSettings.chat_id == chat_id))
+            st = res.scalar_one_or_none()
+            if not st:
+                st = GroupSettings(chat_id=chat_id)
+                session.add(st)
+            setattr(st, attr, val)
+            await session.commit()
+        
+        await update.message.reply_text(msg)
+        return True
+    return False
+
+async def check_media_locks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if not update.message or update.effective_chat.type not in ["group", "supergroup"]:
+        return False
+    
+    if await is_user_admin(update, context):
+        return False
+        
+    chat_id = update.effective_chat.id
+    async with async_session() as session:
+        res = await session.execute(select(GroupSettings).where(GroupSettings.chat_id == chat_id))
+        st = res.scalar_one_or_none()
+        if not st:
+            return False
+            
+        msg = update.message
+        should_delete = False
+        
+        if st.lock_photos and msg.photo:
+            should_delete = True
+        elif st.lock_videos and (msg.video or msg.video_note):
+            should_delete = True
+        elif st.lock_stickers and (msg.sticker or msg.animation):
+            should_delete = True
+        elif st.lock_voice and (msg.voice or msg.audio):
+            should_delete = True
+        elif st.lock_links and msg.text and ("http://" in msg.text or "https://" in msg.text or "t.me/" in msg.text or "@" in msg.text):
+            should_delete = True
+            
+        if should_delete:
+            try:
+                await msg.delete()
+                return True
+            except Exception:
+                pass
+    return False
+
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await handle_purge_commands(update, context):
+        return
+    if await handle_lock_toggle_commands(update, context):
+        return
+    if await check_media_locks(update, context):
+        return
+
     if not update.message or not update.message.text: return
 
     # 1. فلتر الكلمات النابية

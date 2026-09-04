@@ -38,6 +38,15 @@ class Note(Base):
     title: Mapped[str] = mapped_column(String(100))
     content: Mapped[str] = mapped_column(Text)
 
+class GroupSettings(Base):
+    __tablename__ = 'group_settings'
+    chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    lock_photos: Mapped[bool] = mapped_column(Boolean, default=False)
+    lock_videos: Mapped[bool] = mapped_column(Boolean, default=False)
+    lock_links: Mapped[bool] = mapped_column(Boolean, default=False)
+    lock_stickers: Mapped[bool] = mapped_column(Boolean, default=False)
+    lock_voice: Mapped[bool] = mapped_column(Boolean, default=False)
+
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
