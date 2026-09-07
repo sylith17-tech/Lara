@@ -235,7 +235,198 @@ async def cmd_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("🔙 العودة للقائمة", callback_data="back_main")]]
     await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
+
+# ==================== FINANCIAL & REWARDS SYSTEM ====================
+
+async def private_start_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("📊 رصيدي وإحالاتي", callback_data="my_ref_status"), InlineKeyboardButton("🎁 الجائزة اليومية", callback_data="claim_daily")],
+        [InlineKeyboardButton("💸 استبدال النقاط", callback_data="start_cashout")],
+        [InlineKeyboardButton("📢 القناة الرسمية", url=CHANNEL_URL)]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    text = (
+        f"🌸 **أهلاً بك في بوت لارا!**\n\n"
+        f"💡 يمكنك جمع النقاط عبر إحالة أصدقائك واستبدالها برصيد أو تحويل سيريتل كاش حقيقي.\n\n"
+        f"👇 اختر من القائمة أدناه:"
+    )
+    if update.message:
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+    elif update.callback_query:
+        await update.callback_query.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+
+async def handle_ref_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user = update.effective_user
+    bot_obj = await context.bot.get_me()
+
+    async with async_session() as session:
+        res = await session.execute(select(User).where(User.telegram_id == user.id))
+        u = res.scalar_one_or_none()
+        inv_count = u.invites_count if u and u.invites_count else 0
+        pts = u.points if u and u.points else 0
+
+    ref_link = f"https://t.me/{bot_obj.username}?start=ref_{user.id}"
+    text = (
+        f"📊 **حسابك وإحالاتك:**\n\n"
+        f"💰 **رصيد النقاط:** `{pts}` نقطة\n"
+        f"👥 **عدد الإحالات:** `{inv_count}` مشترك\n\n"
+        f"🎁 **مكافأة الإحالة:** 100 نقطة لكل شخص ينضم عبر رابطك!\n"
+        f"🔗 **رابط الدعوة الخاص بك:**\n`{ref_link}`"
+    )
+    keyboard = [[InlineKeyboardButton("🔙 العودة للقائمة", callback_data="back_private_main")]]
+    await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+async def handle_daily_claim(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user = update.effective_user
+    today_str = str(date.today())
+
+    async with async_session() as session:
+        res = await session.execute(select(User).where(User.telegram_id == user.id))
+        u = res.scalar_one_or_none()
+        if not u:
+            await query.answer("❌ تعذر العثور على الحساب!", show_alert=True)
+            return
+
+        inv_count = u.invites_count or 0
+        if inv_count < 1:
+            await query.answer("⚠️ يجب أن تكون لديك إحالة واحدة على الأقل لتفعيل الجائزة اليومية!", show_alert=True)
+            return
+
+        if u.last_daily == today_str:
+            await query.answer("⏳ لقد حصلت على جائزتك اليومية بالفعل! عد غداً.", show_alert=True)
+            return
+
+        u.points = (u.points or 0) + 10
+        u.last_daily = today_str
+        await session.commit()
+        pts = u.points
+
+    await query.answer(f"🎉 تم إضافة 10 نقاط لعملة الجائزة اليومية! رصيدك الآن: {pts} نقطة", show_alert=True)
+
+async def handle_start_cashout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user = update.effective_user
+
+    async with async_session() as session:
+        res = await session.execute(select(User).where(User.telegram_id == user.id))
+        u = res.scalar_one_or_none()
+        pts = u.points if u and u.points else 0
+
+    if pts < 10000:
+        needed = 10000 - pts
+        text = (
+            f"❌ **رصيدك غير كافٍ للاستبدال!**\n\n"
+            f"💰 **رصيدك الحالي:** `{pts}` نقطة\n"
+            f"🎯 **الحد الأدنى للسحب:** `10,000` نقطة (تساوي 10,000 ل.س / 100 ليرة جديدة)\n"
+            f"⏳ **ينقصك:** `{needed}` نقطة لتتمكن من السحب."
+        )
+        keyboard = [[InlineKeyboardButton("🔙 العودة", callback_data="back_private_main")]]
+        await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        return
+
+    text = (
+        f"💸 **استبدال النقاط وسحب الأرباح:**\n\n"
+        f"رصيدك الحالي: `{pts}` نقطة\n"
+        f"سوف يتم استبدال `10,000` نقطة مقابل **10,000 ليرة سورية** (100 ليرة جديدة).\n\n"
+        f"اختر طريقة الاستلام المناسبة لك:"
+    )
+    keyboard = [
+        [InlineKeyboardButton("📱 سيريتل كاش", callback_data="cashout_type_syriatel"), InlineKeyboardButton("💳 رصيد تحويل", callback_data="cashout_type_balance")],
+        [InlineKeyboardButton("❌ إلغاء", callback_data="back_private_main")]
+    ]
+    await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+async def handle_cashout_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    pay_type = "سيريتل كاش" if query.data == "cashout_type_syriatel" else "رصيد تحويل"
+    context.user_data["cashout_type"] = pay_type
+    context.user_data["awaiting_phone"] = True
+
+    text = (
+        f"📱 **إدخال رقم الهاتف:**\n\n"
+        f"طريقة الدفع المختارة: **{pay_type}**\n"
+        f"يرجى إرسال رقم هاتفك المحمول (مثل `09xxxxxxx`) الآن في الرسالة القادمة:"
+    )
+    await query.message.edit_text(text, parse_mode="Markdown")
+
+async def process_phone_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data.get("awaiting_phone"):
+        return False
+
+    phone = update.message.text.strip()
+    if not phone.isdigit() or len(phone) < 9:
+        await update.message.reply_text("❌ رقم الهاتف غير صحيح. يرجى إرسال رقم هاتف محمول مكوّن من أرقام فقط (مثل `0912345678`):")
+        return True
+
+    context.user_data["awaiting_phone"] = False
+    context.user_data["cashout_phone"] = phone
+    pay_type = context.user_data.get("cashout_type", "سيريتل كاش")
+
+    text = (
+        f"📋 **تأكيد طلب السحب:**\n\n"
+        f"💵 **المبلغ:** 10,000 ليرة سورية (100 ليرة جديدة)\n"
+        f"💳 **طريقة الدفع:** {pay_type}\n"
+        f"📱 **الرقم:** `{phone}`\n\n"
+        f"هل أنت تأكد من صحة البيانات وتريد إتمام الطلب؟"
+    )
+    keyboard = [
+        [InlineKeyboardButton("✅ تأكيد الطلب", callback_data="confirm_cashout_final")],
+        [InlineKeyboardButton("❌ إلغاء", callback_data="back_private_main")]
+    ]
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    return True
+
+async def handle_confirm_cashout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user = update.effective_user
+    phone = context.user_data.get("cashout_phone", "غير محدد")
+    pay_type = context.user_data.get("cashout_type", "سيريتل كاش")
+
+    async with async_session() as session:
+        res = await session.execute(select(User).where(User.telegram_id == user.id))
+        u = res.scalar_one_or_none()
+        if not u or (u.points or 0) < 10000:
+            await query.message.edit_text("❌ تعذر إتمام الطلب، رصيدك أقل من 10,000 نقطة!")
+            return
+
+        u.points -= 10000
+        await session.commit()
+
+    # Notify User
+    text_user = (
+        f"✅ **تم تسجيل طلب السحب بنجاح!**\n\n"
+        f"📱 **الرقم:** `{phone}`\n"
+        f"💳 **النوع:** {pay_type}\n\n"
+        f"⏳ **في غضون 12 ساعة سيتم تحويل المبلغ إلى حسابك.** شكراً لثقتك بنا!"
+    )
+    await query.message.edit_text(text_user, parse_mode="Markdown")
+
+    # Notify Admin
+    try:
+        admin_text = (
+            f"🚨 **طلب سحب جديد (استبدال نقاط)!**\n\n"
+            f"👤 **العضو:** {user.first_name} ([{user.id}](tg://user?id={user.id}))\n"
+            f"🏷️ **اليوزر:** @{user.username if user.username else 'بدون'}\n"
+            f"📱 **الرقم للتحويل:** `{phone}`\n"
+            f"💳 **الطريقة:** {pay_type}\n"
+            f"💰 **المبلغ المطلوب:** 10,000 ل.س (مقابل 10,000 نقطة)"
+        )
+        await context.bot.send_message(chat_id=ADMIN_ID, text=admin_text, parse_mode="Markdown")
+    except Exception:
+        pass
+
+# ====================================================================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type == "private" and not (context.args and context.args[0].startswith("ref_")):
+        await private_start_menu(update, context)
+        return
     user = update.effective_user
     
     # Process referral if new user
@@ -259,6 +450,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 inviter = inv_res.scalar_one_or_none()
                 if inviter:
                     inviter.invites_count = (inviter.invites_count or 0) + 1
+                    inviter.points = (inviter.points or 0) + 100
                     try:
                         await context.bot.send_message(
                             chat_id=inviter_id,
@@ -1041,6 +1233,14 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start))
+
+    app.add_handler(CallbackQueryHandler(handle_ref_status, pattern="^my_ref_status$"))
+    app.add_handler(CallbackQueryHandler(handle_daily_claim, pattern="^claim_daily$"))
+    app.add_handler(CallbackQueryHandler(handle_start_cashout, pattern="^start_cashout$"))
+    app.add_handler(CallbackQueryHandler(handle_cashout_type, pattern="^cashout_type_"))
+    app.add_handler(CallbackQueryHandler(handle_confirm_cashout, pattern="^confirm_cashout_final$"))
+    app.add_handler(CallbackQueryHandler(private_start_menu, pattern="^back_private_main$"))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), process_phone_input), group=1)
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
     app.add_handler(CommandHandler("id", cmd_id))
     app.add_handler(CommandHandler("ping", cmd_ping))

@@ -1,6 +1,8 @@
 python-telegram-bot[webhooks]
 SQLAlchemy
 aiosqlite
+asyncpg
+psycopg2-binary
 yt-dlp
 static-ffmpeg
 psutil
