@@ -215,8 +215,36 @@ async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
         except Exception:
             await update.message.reply_text(text, parse_mode=None)
 
+async def cmd_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user = update.effective_user
+    bot_obj = await context.bot.get_me()
+    
+    async with async_session() as session:
+        res = await session.execute(select(User).where(User.telegram_id == user.id))
+        u = res.scalar_one_or_none()
+        inv_count = u.invites_count if u and u.invites_count else 0
+
+    ref_link = f"https://t.me/{bot_obj.username}?start=ref_{user.id}"
+    text = (
+        f"🎁 **نظام المشاركة وجلب الأعضاء:**\n\n"
+        f"🔗 **رابط الدعوة الخاص بك:**\n`{ref_link}`\n\n"
+        f"📊 **عدد الأشخاص الذين دعوتهم:** `{inv_count}` شخص\n\n"
+        f"💡 شارك الرابط مع أصدقائك وفي المجموعات لزيادة دعواتك!"
+    )
+    keyboard = [[InlineKeyboardButton("🔙 العودة للقائمة", callback_data="back_main")]]
+    await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    
+    # Process referral if new user
+    inviter_id = None
+    if context.args and context.args[0].startswith("ref_"):
+        try:
+            inviter_id = int(context.args[0].replace("ref_", ""))
+        except ValueError:
+            pass
     if not await is_subscribed(user.id, context):
         await send_sub_prompt(update, context)
         return
@@ -226,6 +254,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         u = res.scalar_one_or_none()
         if not u:
             session.add(User(telegram_id=user.id, username=user.username, first_name=user.first_name, is_admin=(user.id == ADMIN_ID)))
+            if inviter_id and inviter_id != user.id:
+                inv_res = await session.execute(select(User).where(User.telegram_id == inviter_id))
+                inviter = inv_res.scalar_one_or_none()
+                if inviter:
+                    inviter.invites_count = (inviter.invites_count or 0) + 1
+                    try:
+                        await context.bot.send_message(
+                            chat_id=inviter_id,
+                            text=f"🎉 **عضو جديد دخل عبر رابطك!**\n👤 **الاسم:** {user.first_name}\n📊 **إجمالي دعواتك:** {inviter.invites_count}"
+                        )
+                    except Exception:
+                        pass
             await session.commit()
     text = f"🌸 **أهلاً بك يا {user.first_name} في بوت لارا (V5.9 Legendary - VIP_ARM)!**\n\n✨ أنا مساعدتك الذكية المتكاملة للأغاني، الألعاب التفاعلية، والإدارة الفائقة."
     markup = get_main_keyboard(bot_obj.username, user.id == ADMIN_ID)
@@ -1012,6 +1052,8 @@ def main():
     app.add_handler(broadcast_conv)
 
     app.add_handler(CallbackQueryHandler(button_router))
+    app.add_handler(CallbackQueryHandler(cmd_referral, pattern='^cmd_referral$'))
+    
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
 
     print("[+] Bot Lara V5.9 Legendary (VIP_ARM Edition) Started Successfully!")
