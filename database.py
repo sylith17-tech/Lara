@@ -1,8 +1,8 @@
-from sqlalchemy import Column, Integer, String
+from sqlalchemy import Column, Integer, String, BigInteger, Boolean, text
 import asyncio
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy import String, BigInteger, Text, Boolean, Integer, DateTime, func
+from sqlalchemy import Column, Integer, String, BigInteger, Boolean, text
 
 DATABASE_URL = "sqlite+aiosqlite:///lara.db"
 engine = create_async_engine(DATABASE_URL, echo=False)
@@ -55,3 +55,8 @@ class GroupSettings(Base):
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        for col, col_type in [("invites_count", "INTEGER DEFAULT 0"), ("points", "INTEGER DEFAULT 0"), ("last_daily", "VARCHAR")]:
+            try:
+                await conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} {col_type}"))
+            except Exception:
+                pass

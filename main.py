@@ -1,3 +1,62 @@
+
+REQUIRED_CHANNEL = "@VIP_ARM0"
+
+async def is_user_subscribed(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if user_id == ADMIN_ID:
+        return True
+    try:
+        member = await context.bot.get_chat_member(chat_id=REQUIRED_CHANNEL, user_id=user_id)
+        return member.status in ["creator", "administrator", "member"]
+    except Exception:
+        return True
+
+async def send_sub_required_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 الاشتراك في القناة", url="https://t.me/VIP_ARM0")],
+        [InlineKeyboardButton("✅ تأكيد الاشتراك", callback_data="check_sub")]
+    ])
+    msg = (
+        "⚠️ **عذراً عزيزي! يجب عليك الاشتراك في قناة البوت أولاً لاستخدام الخدمات.**\n\n"
+        "📢 القناة: @VIP_ARM0\n\n"
+        "اشترك ثم اضغط على زر **تأكيد الاشتراك ✅** أدناه."
+    )
+    if update.callback_query:
+        await update.callback_query.answer("⚠️ لم تشترك في القناة بعد!", show_alert=True)
+        try:
+            await update.callback_query.message.edit_text(msg, reply_markup=kb, parse_mode="Markdown")
+        except Exception:
+            pass
+    elif update.message:
+        await update.message.reply_text(msg, reply_markup=kb, parse_mode="Markdown")
+
+async def handle_check_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if await is_user_subscribed(query.from_user.id, context):
+        await query.answer("🎉 تم التأكد من اشتراكك بنجاح!", show_alert=True)
+        await private_start_menu(update, context)
+    else:
+        await query.answer("❌ لم تشترك في القناة بعد! يرجى الاشتراك أولاً.", show_alert=True)
+
+async def handle_get_ref_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not await is_user_subscribed(query.from_user.id, context):
+        return await send_sub_required_msg(update, context)
+        
+    bot_obj = await context.bot.get_me()
+    ref_link = f"https://t.me/{bot_obj.username}?start=ref_{query.from_user.id}"
+    
+    text = (
+        f"🔗 **رابط الإحالة الخاص بك:**\n\n"
+        f"`{ref_link}`\n\n"
+        f"💡 **طريقة الاستخدام:**\n"
+        f"قم بنسخ الرابط وإرساله لأصدقائك أو في المجموعات.\n"
+        f"لكل شخص يدخل البوت عبر رابطك ستحصل على **100 نقطة** تلقائياً! 🎉"
+    )
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 العودة للقائمة", callback_data="back_private_main")]])
+    await query.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+
+
 import threading, http.server, socketserver, os, logging, asyncio, glob, time, random, urllib.request
 from datetime import datetime
 import platform
