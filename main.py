@@ -241,7 +241,6 @@ def get_main_keyboard(bot_username, is_admin):
         [InlineKeyboardButton("📜 أوامر الأعضاء", callback_data="cmd_user"), InlineKeyboardButton("👮 أوامر المجموعة", callback_data="cmd_group")],
         [InlineKeyboardButton("🎮 الألعاب والترفيه", callback_data="cmd_games"), InlineKeyboardButton("🛠️ أدوات وميديا", callback_data="cmd_tools")],
         [InlineKeyboardButton("💰 نظام الربح الذاتي في سوريا", callback_data="earn_sys")],
-            [InlineKeyboardButton("💰 نظام الربح الذاتي في سوريا", callback_data="earn_sys")],
         [InlineKeyboardButton("💡 تقديم مقترح", callback_data="btn_suggest"), InlineKeyboardButton("☕ دعم المطور", callback_data="btn_donate")]
     ]
     if is_admin:
@@ -534,9 +533,8 @@ async def handle_confirm_cashout(update: Update, context: ContextTypes.DEFAULT_T
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await handle_check_sub(update, context):
         return
-    if update.effective_chat.type == "private" and not (context.args and context.args[0].startswith("ref_")):
-        await private_start_menu(update, context)
-        return
+    # تم دمج المسار لتجنب ازدواجية الرسائل وإرسال قائمة موحدة مباشرة
+    pass
     user = update.effective_user
     
     # Process referral if new user
