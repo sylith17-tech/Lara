@@ -1,6 +1,6 @@
 from datetime import date
 
-REQUIRED_CHANNEL = "@VIP_ARM0"
+REQUIRED_CHANNEL = "@litharm0"
 
 async def is_user_subscribed(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     if user_id == ADMIN_ID:
@@ -13,12 +13,12 @@ async def is_user_subscribed(user_id: int, context: ContextTypes.DEFAULT_TYPE) -
 
 async def send_sub_required_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 الاشتراك في القناة", url="https://t.me/VIP_ARM0")],
+        [InlineKeyboardButton("📢 الاشتراك في القناة", url="https://t.me/litharm0")],
         [InlineKeyboardButton("✅ تأكيد الاشتراك", callback_data="check_sub")]
     ])
     msg = (
         "⚠️ **عذراً عزيزي! يجب عليك الاشتراك في قناة البوت أولاً لاستخدام الخدمات.**\n\n"
-        "📢 القناة: @VIP_ARM0\n\n"
+        "📢 القناة: @litharm0\n\n"
         "اشترك ثم اضغط على زر **تأكيد الاشتراك ✅** أدناه."
     )
     if update.callback_query:
@@ -42,10 +42,10 @@ async def handle_check_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     sub_text = """❌ لم تشترك في القناة بعد! يرجى الاشتراك أولاً لمتابعة استخدام البوت.
 
-📢 قناة البوت: @VIP_ARM0"""
+📢 قناة البوت: @litharm0"""
     
     sub_keyboard = [
-        [InlineKeyboardButton("📢 اشترك في القناة", url="https://t.me/VIP_ARM0")],
+        [InlineKeyboardButton("📢 اشترك في القناة", url="https://t.me/litharm0")],
         [InlineKeyboardButton("✅ تأكيد الاشتراك", callback_data="check_subscription")]
     ]
     reply_markup = InlineKeyboardMarkup(sub_keyboard)
@@ -140,7 +140,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
-logger = logging.getLogger("VIP_ARM_LEGENDARY")
+logger = logging.getLogger("litharm_LEGENDARY")
 
 WAIT_TRIGGER, WAIT_RESPONSE, WAIT_BROADCAST, WAIT_SUGGESTION = range(4)
 
@@ -208,7 +208,7 @@ def get_system_telemetry() -> str:
         ram = psutil.virtual_memory()
         disk = psutil.disk_usage('/')
         return (
-            f"🖥️ **معلومات السيستم (VIP_ARM OS v5.9):**\n\n"
+            f"🖥️ **معلومات السيستم (litharm OS v5.9):**\n\n"
             f"⏱️ **التشغيل:** `{hours}h {minutes}m {seconds}s`\n"
             f"💻 **النظام:** `{platform.system()} {platform.release()}`\n"
             f"⚙️ **المعالج (CPU):** `{cpu_usage}%`\n"
@@ -568,7 +568,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except Exception:
                         pass
             await session.commit()
-    text = f"🌸 **أهلاً بك يا {user.first_name} في بوت لارا (V5.9 Legendary - VIP_ARM)!**\n\n✨ أنا مساعدتك الذكية المتكاملة للأغاني، الألعاب التفاعلية، والإدارة الفائقة."
+    text = f"🌸 **أهلاً بك يا {user.first_name} في بوت لارا (V5.9 Legendary - litharm)!**\n\n✨ أنا مساعدتك الذكية المتكاملة للأغاني، الألعاب التفاعلية، والإدارة الفائقة."
     markup = get_main_keyboard(bot_obj.username, user.id == ADMIN_ID)
     if update.callback_query:
         await update.callback_query.answer()
@@ -662,7 +662,7 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "owner_subs":
         await handle_owner_subs_callback(update, context)
     elif data == "cmd_group":
-        msg = """👮 **دليل أوامر إدارة المجموعة (VIP_ARM Edition):**
+        msg = """👮 **دليل أوامر إدارة المجموعة (litharm Edition):**
 
 🧹 **1. الحذف والتطهير:**
 • `مسح 10` : مسح آخر 10 رسائل (من 1 إلى 100).
@@ -707,10 +707,10 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "3. تصفح الأقسام بسلاسة عبر الأزرار الشفافة أدناه.\n\n"
             "🛠️ **الدعم الفني والتواصل:**\n"
             "واجهتك أي مشكلة، استفسار، أو تريد التبليغ عن خطأ؟ تواصل فوراً مع المطور الأساسي:\n"
-            "👤 **المطور:** [VIP_ARM](https://t.me/VIP_ARM)"
+            "👤 **المطور:** [litharm](https://t.me/litharm)"
         )
         guide_kb = [
-            [InlineKeyboardButton("🛠️ تواصل مع المطور", url="https://t.me/VIP_ARM")],
+            [InlineKeyboardButton("🛠️ تواصل مع المطور", url="https://t.me/litharm")],
             [InlineKeyboardButton("🔙 عودة للرئيسية", callback_data="main_menu")]
         ]
         await query.message.edit_text(guide_text, reply_markup=InlineKeyboardMarkup(guide_kb), parse_mode="Markdown", disable_web_page_preview=True)
@@ -799,7 +799,7 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(back_main), parse_mode=None)
 
     elif data == "btn_donate":
-        await query.message.reply_text("💖 شكراً لدعمك المطور VIP_ARM! البوت مستمر بفضلكم.")
+        await query.message.reply_text("💖 شكراً لدعمك المطور litharm! البوت مستمر بفضلكم.")
 
     elif data == "admin_main" and uid == ADMIN_ID:
         keyboard = [
@@ -807,7 +807,7 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("📊 الإحصائيات", callback_data="adm_stats"), InlineKeyboardButton("🖥️ حالة السيرفر", callback_data="adm_sys_status")],
             [InlineKeyboardButton("🔙 عودة للرئيسية", callback_data="main_menu")]
         ]
-        await query.message.edit_text("⚙️ **لوحة المطور الخاصة (VIP_ARM):**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        await query.message.edit_text("⚙️ **لوحة المطور الخاصة (litharm):**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
 
     elif data == "adm_sys_status" and uid == ADMIN_ID:
         await query.edit_message_text(get_system_telemetry(), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 عودة", callback_data="admin_main")]]), parse_mode=None)
@@ -1019,8 +1019,8 @@ async def check_media_locks(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 
-CHANNEL_USERNAME = "@VIP_ARM0"
-CHANNEL_URL = "https://t.me/VIP_ARM0"
+CHANNEL_USERNAME = "@litharm0"
+CHANNEL_URL = "https://t.me/litharm0"
 
 async def is_subscribed(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     if user_id == ADMIN_ID:
@@ -1034,7 +1034,7 @@ async def is_subscribed(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> boo
 async def send_sub_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = """⚠️ عذراً عزيزي، يجب عليك الاشتراك في قناة البوت أولاً لاستخدامه!
 
-📢 القناة: @VIP_ARM0
+📢 القناة: @litharm0
 
 اشترك بالقناة ثم اضغط على زر (تحقق من الاشتراك) بالأسفل."""
     keyboard = [
@@ -1065,7 +1065,7 @@ async def get_user_role_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if is_owner:
         text = (
-            "👑 👑 أهلاً بك يا مالك البوت العظيم (VIP_ARM)!\n\n"
+            "👑 👑 أهلاً بك يا مالك البوت العظيم (litharm)!\n\n"
             "🛠️ 🛠️ لوحة التحكم العليا للخدمات والاشتراكات:\n"
             "• يمكنك متابعة المجموعات وإدارة الاشتراكات.\n"
             "• الوصول إلى كافة أدوات المطور والتحكم الكامل."
@@ -1174,7 +1174,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await asyncio.sleep(1.2)
         await hack_msg.edit_text(f"🎯 تم العثور على الهدف!\n🌐 IP: `{fake_ip}`\n🔓 جاري كسر تشفير الحماية...\n\n[▓▓▓▓▓▓▓░░░] 75%", parse_mode=None)
         await asyncio.sleep(1.5)
-        return await hack_msg.edit_text(f"✅ **تم الاختراق بنجاح!** 💀\nتم سحب الصور والملفات من جهاز {target_name}!\n\n*(بمزح بمزح، نظام حماية VIP_ARM أقوى من هيك بكتير 😂)*", parse_mode=None)
+        return await hack_msg.edit_text(f"✅ **تم الاختراق بنجاح!** 💀\nتم سحب الصور والملفات من جهاز {target_name}!\n\n*(بمزح بمزح، نظام حماية litharm أقوى من هيك بكتير 😂)*", parse_mode=None)
 
     if text.startswith("لارا نسبة الحب"):
         names = text.replace("لارا نسبة الحب", "").strip()
@@ -1285,9 +1285,9 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not query_ai or query_ai in ["نكتة", "نكت", "قصف", "احكي", "اختراق", "نسبة الحب"]: return
 
         ai_replies = {
-            "من انت": "أنا لارا، مساعدتك الذكية والمطورة بواسطة المبدع VIP_ARM! 🌸",
+            "من انت": "أنا لارا، مساعدتك الذكية والمطورة بواسطة المبدع litharm! 🌸",
             "كيفك": "بأفضل حال والحمد لله! كيف أساعدك اليوم؟ ✨",
-            "من طورك": "تم برمجتي بواسطة المطور الأسطوري VIP_ARM 🚀"
+            "من طورك": "تم برمجتي بواسطة المطور الأسطوري litharm 🚀"
         }
         for k, v in ai_replies.items():
             if k in query_ai: return await update.message.reply_text(v)
@@ -1414,7 +1414,7 @@ def main():
     
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
 
-    print("[+] Bot Lara V5.9 Legendary (VIP_ARM Edition) Started Successfully!")
+    print("[+] Bot Lara V5.9 Legendary (litharm Edition) Started Successfully!")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
