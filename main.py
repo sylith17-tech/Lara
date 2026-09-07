@@ -32,15 +32,30 @@ async def send_sub_required_msg(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def handle_check_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_obj = update.effective_user
-    if not user_obj:
+    user = update.effective_user
+    if not user:
         return True
-    if await is_user_subscribed(user_obj.id, context):
-        await query.answer("🎉 تم التأكد من اشتراكك بنجاح!", show_alert=True)
-        await private_start_menu(update, context)
-    else:
-        await query.answer("❌ لم تشترك في القناة بعد! يرجى الاشتراك أولاً.", show_alert=True)
 
+    is_sub = await is_user_subscribed(user.id, context)
+    if is_sub:
+        return True
+
+    sub_text = "❌ لم تشترك في القناة بعد! يرجى الاشتراك أولاً لمتابعة استخدام البوت.
+
+📢 قناة البوت: @VIP_ARM0"
+    sub_keyboard = [[InlineKeyboardButton("📢 اشترك في القناة", url="https://t.me/VIP_ARM0")], [InlineKeyboardButton("✅ تأكيد الاشتراك", callback_data="check_subscription")]]
+    reply_markup = InlineKeyboardMarkup(sub_keyboard)
+
+    if query:
+        try:
+            await query.answer("❌ لم تشترك في القناة بعد!", show_alert=True)
+            await query.edit_message_text(sub_text, reply_markup=reply_markup)
+        except Exception:
+            await context.bot.send_message(chat_id=user.id, text=sub_text, reply_markup=reply_markup)
+    else:
+        if update.message:
+            await update.message.reply_text(sub_text, reply_markup=reply_markup)
+    return False
 async def handle_get_ref_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
