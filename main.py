@@ -32,7 +32,10 @@ async def send_sub_required_msg(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def handle_check_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if await is_user_subscribed(query.from_user.id, context):
+    user_obj = update.effective_user
+    if not user_obj:
+        return True
+    if await is_user_subscribed(user_obj.id, context):
         await query.answer("🎉 تم التأكد من اشتراكك بنجاح!", show_alert=True)
         await private_start_menu(update, context)
     else:
@@ -41,11 +44,11 @@ async def handle_check_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_get_ref_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if not await is_user_subscribed(query.from_user.id, context):
+    if not await is_user_subscribed(update.effective_user.id, context):
         return await send_sub_required_msg(update, context)
         
     bot_obj = await context.bot.get_me()
-    ref_link = f"https://t.me/{bot_obj.username}?start=ref_{query.from_user.id}"
+    ref_link = f"https://t.me/{bot_obj.username}?start=ref_{update.effective_user.id}"
     
     text = (
         f"🔗 **رابط الإحالة الخاص بك:**\n\n"
@@ -584,7 +587,7 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
-    uid = query.from_user.id
+    uid = update.effective_user.id
     chat_id = query.message.chat_id
     bot_obj = await context.bot.get_me()
     back_main = [[InlineKeyboardButton("🔙 عودة للرئيسية", callback_data="main_menu")]]
@@ -611,7 +614,7 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await query.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(back_main), parse_mode=None)
     elif data == "check_sub":
-        if await is_subscribed(query.from_user.id, context):
+        if await is_subscribed(update.effective_user.id, context):
             await query.answer("✅ تم التحقق! أنت مشترك بالفعل، يمكنك استخدام البوت الآن.", show_alert=True)
             try:
                 await query.message.delete()
@@ -756,7 +759,7 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def add_reply_init(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if query.from_user.id != ADMIN_ID: return ConversationHandler.END
+    if update.effective_user.id != ADMIN_ID: return ConversationHandler.END
     await query.message.reply_text("➕ أرسل كلمة المفتاح:\n*(أو /cancel للإلغاء)*", parse_mode=None)
     return WAIT_TRIGGER
 
@@ -789,7 +792,7 @@ async def suggest_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def broadcast_init(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if query.from_user.id != ADMIN_ID: return ConversationHandler.END
+    if update.effective_user.id != ADMIN_ID: return ConversationHandler.END
     await query.message.reply_text("📢 أرسل رسالة الإذاعة للجميع:\n*(أو /cancel للإلغاء)*", parse_mode=None)
     return WAIT_BROADCAST
 
@@ -1026,7 +1029,7 @@ async def get_user_role_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def handle_owner_subs_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if query.from_user.id != ADMIN_ID:
+    if update.effective_user.id != ADMIN_ID:
         await query.answer("⚠️ هذه اللوحة مخصصة لمالك البوت فقط!", show_alert=True)
         return
         
