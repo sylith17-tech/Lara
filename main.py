@@ -1,6 +1,6 @@
 from datetime import date
 
-REQUIRED_CHANNEL = "@litharm0"
+REQUIRED_CHANNEL = "@VIP_ARM0"
 
 async def is_user_subscribed(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     if user_id == ADMIN_ID:
@@ -14,12 +14,12 @@ async def is_user_subscribed(user_id: int, context: ContextTypes.DEFAULT_TYPE) -
 
 async def send_sub_required_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 الاشتراك في القناة", url="https://t.me/litharm0")],
+        [InlineKeyboardButton("📢 الاشتراك في القناة", url="https://t.me/VIP_ARM0")],
         [InlineKeyboardButton("✅ تأكيد الاشتراك", callback_data="check_sub")]
     ])
     msg = (
         "⚠️ **عذراً عزيزي! يجب عليك الاشتراك في قناة البوت أولاً لاستخدام الخدمات.**\n\n"
-        "📢 القناة: @litharm0\n\n"
+        "📢 القناة: @VIP_ARM0\n\n"
         "اشترك ثم اضغط على زر **تأكيد الاشتراك ✅** أدناه."
     )
     if update.callback_query:
@@ -43,10 +43,10 @@ async def handle_check_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     sub_text = """❌ لم تشترك في القناة بعد! يرجى الاشتراك أولاً لمتابعة استخدام البوت.
 
-📢 قناة البوت: @litharm0"""
+📢 قناة البوت: @VIP_ARM0"""
     
     sub_keyboard = [
-        [InlineKeyboardButton("📢 اشترك في القناة", url="https://t.me/litharm0")],
+        [InlineKeyboardButton("📢 اشترك في القناة", url="https://t.me/VIP_ARM0")],
         [InlineKeyboardButton("✅ تأكيد الاشتراك", callback_data="check_subscription")]
     ]
     reply_markup = InlineKeyboardMarkup(sub_keyboard)
@@ -1020,8 +1020,8 @@ async def check_media_locks(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 
-CHANNEL_USERNAME = "@litharm0"
-CHANNEL_URL = "https://t.me/litharm0"
+CHANNEL_USERNAME = "@VIP_ARM0"
+CHANNEL_URL = "https://t.me/VIP_ARM0"
 
 async def is_subscribed(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     return await is_user_subscribed(user_id, context)
@@ -1029,7 +1029,7 @@ async def is_subscribed(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> boo
 async def send_sub_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = """⚠️ عذراً عزيزي، يجب عليك الاشتراك في قناة البوت أولاً لاستخدامه!
 
-📢 القناة: @litharm0
+📢 القناة: @VIP_ARM0
 
 اشترك بالقناة ثم اضغط على زر (تحقق من الاشتراك) بالأسفل."""
     keyboard = [
