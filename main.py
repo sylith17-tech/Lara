@@ -616,7 +616,7 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_obj = await context.bot.get_me()
     back_main = [[InlineKeyboardButton("🔙 عودة للرئيسية", callback_data="main_menu")]]
 
-    elif data == "earn_sys":
+    if data == "earn_sys":
         fin_keyboard = [
             [InlineKeyboardButton("📊 رصيدي وإحالاتي", callback_data="my_ref_status"), InlineKeyboardButton("🎁 الجائزة اليومية", callback_data="claim_daily")],
             [InlineKeyboardButton("💸 استبدال النقاط", callback_data="start_cashout")],
