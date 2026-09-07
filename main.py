@@ -1023,13 +1023,7 @@ CHANNEL_USERNAME = "@litharm0"
 CHANNEL_URL = "https://t.me/litharm0"
 
 async def is_subscribed(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    if user_id == ADMIN_ID:
-        return True
-    try:
-        member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
-        return member.status in ["creator", "administrator", "member"]
-    except Exception:
-        return True
+    return await is_user_subscribed(user_id, context)
 
 async def send_sub_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = """⚠️ عذراً عزيزي، يجب عليك الاشتراك في قناة البوت أولاً لاستخدامه!
