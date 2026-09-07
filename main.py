@@ -240,6 +240,8 @@ def get_main_keyboard(bot_username, is_admin):
         [InlineKeyboardButton("➕ تفعيل البوت بمجموعة", url=f"https://t.me/{bot_username}?startgroup=true")],
         [InlineKeyboardButton("📜 أوامر الأعضاء", callback_data="cmd_user"), InlineKeyboardButton("👮 أوامر المجموعة", callback_data="cmd_group")],
         [InlineKeyboardButton("🎮 الألعاب والترفيه", callback_data="cmd_games"), InlineKeyboardButton("🛠️ أدوات وميديا", callback_data="cmd_tools")],
+        [InlineKeyboardButton("💰 نظام الربح الذاتي في سوريا", callback_data="earn_sys")],
+            [InlineKeyboardButton("💰 نظام الربح الذاتي في سوريا", callback_data="earn_sys")],
         [InlineKeyboardButton("💡 تقديم مقترح", callback_data="btn_suggest"), InlineKeyboardButton("☕ دعم المطور", callback_data="btn_donate")]
     ]
     if is_admin:
@@ -613,6 +615,22 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = getattr(getattr(query, 'message', None), 'chat_id', None)
     bot_obj = await context.bot.get_me()
     back_main = [[InlineKeyboardButton("🔙 عودة للرئيسية", callback_data="main_menu")]]
+
+    elif data == "earn_sys":
+        fin_keyboard = [
+            [InlineKeyboardButton("📊 رصيدي وإحالاتي", callback_data="my_ref_status"), InlineKeyboardButton("🎁 الجائزة اليومية", callback_data="claim_daily")],
+            [InlineKeyboardButton("💸 استبدال النقاط", callback_data="start_cashout")],
+            [InlineKeyboardButton("🔙 العودة للقائمة الرئيسية", callback_data="main_menu")]
+        ]
+        fin_text = (
+            "🌸 **نظام الربح الذاتي في سوريا:**\n\n"
+            "💡 يمكنك جمع النقاط عبر إحالة أصدقائك واستبدالها برصيد أو تحويل سيريتل كاش حقيقي.\n\n"
+            "👇 اختر من القائمة أدناه:"
+        )
+        try:
+            await query.message.edit_text(fin_text, reply_markup=InlineKeyboardMarkup(fin_keyboard), parse_mode=None)
+        except Exception:
+            pass
 
     if data == "main_menu":
         text = "🌸 **روبوت لارا (V5.9 Legendary):**\n\n✨ اختر من القائمة أدناه:"
