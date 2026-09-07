@@ -179,6 +179,42 @@ def get_xo_keyboard(board):
 # ====================================================
 # --- الأوامر الأساسية ---
 # ====================================================
+async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.new_chat_members:
+        return
+    for member in update.message.new_chat_members:
+        if member.id == context.bot.id:
+            continue
+        
+        user_mention = f"[{member.first_name}](tg://user?id={member.id})"
+        user_handle = f"@{member.username}" if member.username else "بدون معرف"
+        chat_title = update.effective_chat.title
+        
+        text = (
+            f"🎉 **عضو جديد انضم إلى المجموعة!**\n\n"
+            f"👤 **العضو:** {user_mention}\n"
+            f"🆔 **الآيدي:** `{member.id}`\n"
+            f"🏷️ **اليوزر:** {user_handle}\n"
+            f"🏰 **المجموعة:** {chat_title}\n\n"
+            f"🌸 **أهلاً بك في عائلتنا! نتمنى لك وقتاً ممتعاً ومفيداً.**"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("📢 قناة البوت الرسمية", url=CHANNEL_URL)],
+            [InlineKeyboardButton("🤖 تحدث مع لارا", url=f"https://t.me/{context.bot.username}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        try:
+            await update.message.reply_text(
+                text, 
+                reply_markup=reply_markup, 
+                parse_mode="Markdown",
+                disable_web_page_preview=True
+            )
+        except Exception:
+            await update.message.reply_text(text, parse_mode=None)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not await is_subscribed(user.id, context):
@@ -965,6 +1001,7 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
     app.add_handler(CommandHandler("id", cmd_id))
     app.add_handler(CommandHandler("ping", cmd_ping))
     app.add_handler(CommandHandler("calc", cmd_calc))
