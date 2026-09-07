@@ -1,3 +1,4 @@
+from datetime import date
 
 REQUIRED_CHANNEL = "@VIP_ARM0"
 
