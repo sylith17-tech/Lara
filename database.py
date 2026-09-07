@@ -1,8 +1,8 @@
-from sqlalchemy import Column, Integer, String, BigInteger, Boolean, text
+from sqlalchemy import Column, Integer, String, BigInteger, Boolean, text, Text
 import asyncio
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy import Column, Integer, String, BigInteger, Boolean, text
+from sqlalchemy import Column, Integer, String, BigInteger, Boolean, text, Text
 
 DATABASE_URL = "sqlite+aiosqlite:///lara.db"
 engine = create_async_engine(DATABASE_URL, echo=False)
