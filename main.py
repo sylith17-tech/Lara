@@ -238,22 +238,38 @@ async def cmd_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== FINANCIAL & REWARDS SYSTEM ====================
 
+
 async def private_start_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
+    bot_obj = await context.bot.get_me()
+    
+    # 1. قائمة نظام الإحالات والأرباح
+    fin_keyboard = [
         [InlineKeyboardButton("📊 رصيدي وإحالاتي", callback_data="my_ref_status"), InlineKeyboardButton("🎁 الجائزة اليومية", callback_data="claim_daily")],
-        [InlineKeyboardButton("💸 استبدال النقاط", callback_data="start_cashout")],
-        [InlineKeyboardButton("📢 القناة الرسمية", url=CHANNEL_URL)]
+        [InlineKeyboardButton("💸 استبدال النقاط", callback_data="start_cashout")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    text = (
-        f"🌸 **أهلاً بك في بوت لارا!**\n\n"
-        f"💡 يمكنك جمع النقاط عبر إحالة أصدقائك واستبدالها برصيد أو تحويل سيريتل كاش حقيقي.\n\n"
-        f"👇 اختر من القائمة أدناه:"
+    fin_text = (
+        "🌸 **أهلاً بك في بوت لارا!**\n\n"
+        "💡 يمكنك جمع النقاط عبر إحالة أصدقائك واستبدالها برصيد أو تحويل سيريتل كاش حقيقي.\n\n"
+        "👇 اختر من القائمة أدناه:"
     )
+
+    # 2. قائمة خدمات البوت العامة والإدارة
+    main_keyboard = [
+        [InlineKeyboardButton("➕ تفعيل البوت بمجموعة", url=f"https://t.me/{bot_obj.username}?startgroup=true")],
+        [InlineKeyboardButton("👮‍♂️ أوامر المجموعة", callback_data="cmd_group_help"), InlineKeyboardButton("📜 أوامر الأعضاء", callback_data="cmd_member_help")],
+        [InlineKeyboardButton("🛠️ أدوات وميديا", callback_data="cmd_tools_help"), InlineKeyboardButton("🎮 الألعاب والترفيه", callback_data="cmd_games_help")],
+        [InlineKeyboardButton("☕ دعم المطور", callback_data="btn_support"), InlineKeyboardButton("💡 تقديم اقتراح", callback_data="btn_suggest")]
+    ]
+    if update.effective_user and update.effective_user.id == ADMIN_ID:
+        main_keyboard.append([InlineKeyboardButton("⚙️ لوحة تحكم المطور (خاص)", callback_data="adm_panel")])
+
+    main_text = "🌸 **روبوت لارا (V5.9 Legendary):**\n\n✨ اختر من القائمة أدناه:"
+
     if update.message:
-        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+        await update.message.reply_text(fin_text, reply_markup=InlineKeyboardMarkup(fin_keyboard), parse_mode="Markdown")
+        await update.message.reply_text(main_text, reply_markup=InlineKeyboardMarkup(main_keyboard), parse_mode="Markdown")
     elif update.callback_query:
-        await update.callback_query.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+        await update.callback_query.message.edit_text(fin_text, reply_markup=InlineKeyboardMarkup(fin_keyboard), parse_mode="Markdown")
 
 async def handle_ref_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
