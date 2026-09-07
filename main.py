@@ -241,6 +241,7 @@ def get_main_keyboard(bot_username, is_admin):
         [InlineKeyboardButton("📜 أوامر الأعضاء", callback_data="cmd_user"), InlineKeyboardButton("👮 أوامر المجموعة", callback_data="cmd_group")],
         [InlineKeyboardButton("🎮 الألعاب والترفيه", callback_data="cmd_games"), InlineKeyboardButton("🛠️ أدوات وميديا", callback_data="cmd_tools")],
         [InlineKeyboardButton("💰 نظام الربح الذاتي في سوريا", callback_data="earn_sys")],
+            [InlineKeyboardButton("📖 دليل وشرح البوت", callback_data="bot_guide")],
         [InlineKeyboardButton("💡 تقديم مقترح", callback_data="btn_suggest"), InlineKeyboardButton("☕ دعم المطور", callback_data="btn_donate")]
     ]
     if is_admin:
