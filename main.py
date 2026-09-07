@@ -40,10 +40,14 @@ async def handle_check_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_sub:
         return True
 
-    sub_text = "❌ لم تشترك في القناة بعد! يرجى الاشتراك أولاً لمتابعة استخدام البوت.
+    sub_text = """❌ لم تشترك في القناة بعد! يرجى الاشتراك أولاً لمتابعة استخدام البوت.
 
-📢 قناة البوت: @VIP_ARM0"
-    sub_keyboard = [[InlineKeyboardButton("📢 اشترك في القناة", url="https://t.me/VIP_ARM0")], [InlineKeyboardButton("✅ تأكيد الاشتراك", callback_data="check_subscription")]]
+📢 قناة البوت: @VIP_ARM0"""
+    
+    sub_keyboard = [
+        [InlineKeyboardButton("📢 اشترك في القناة", url="https://t.me/VIP_ARM0")],
+        [InlineKeyboardButton("✅ تأكيد الاشتراك", callback_data="check_subscription")]
+    ]
     reply_markup = InlineKeyboardMarkup(sub_keyboard)
 
     if query:
