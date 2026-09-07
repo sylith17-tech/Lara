@@ -300,6 +300,13 @@ async def cmd_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def private_start_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.callback_query:
+        try:
+            await update.callback_query.answer()
+        except Exception:
+            pass
+    if not await handle_check_sub(update, context):
+        return
     bot_obj = await context.bot.get_me()
     
     # 1. قائمة نظام الإحالات والأرباح
@@ -363,8 +370,9 @@ async def handle_daily_claim(update: Update, context: ContextTypes.DEFAULT_TYPE)
         res = await session.execute(select(User).where(User.telegram_id == user.id))
         u = res.scalar_one_or_none()
         if not u:
-            await query.answer("❌ تعذر العثور على الحساب!", show_alert=True)
-            return
+            u = User(telegram_id=user.id, points=0, invites_count=0)
+            session.add(u)
+            await session.commit()
 
         inv_count = u.invites_count or 0
         if inv_count < 1:
@@ -500,6 +508,8 @@ async def handle_confirm_cashout(update: Update, context: ContextTypes.DEFAULT_T
 # ====================================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await handle_check_sub(update, context):
+        return
     if update.effective_chat.type == "private" and not (context.args and context.args[0].startswith("ref_")):
         await private_start_menu(update, context)
         return
