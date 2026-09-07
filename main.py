@@ -604,10 +604,13 @@ async def cmd_xo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ====================================================
 async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    try:
+        await query.answer()
+    except Exception:
+        pass
     data = query.data
     uid = update.effective_user.id
-    chat_id = query.message.chat_id
+    chat_id = getattr(getattr(query, 'message', None), 'chat_id', None)
     bot_obj = await context.bot.get_me()
     back_main = [[InlineKeyboardButton("🔙 عودة للرئيسية", callback_data="main_menu")]]
 
@@ -632,15 +635,13 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• `لارا اختراق` (بالرد على شخص للمزاح)"
         )
         await query.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(back_main), parse_mode=None)
-    elif data == "check_sub":
-        if await is_subscribed(update.effective_user.id, context):
-            await query.answer("✅ تم التحقق! أنت مشترك بالفعل، يمكنك استخدام البوت الآن.", show_alert=True)
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
+    elif data in ["check_sub", "check_subscription"]:
+        if await is_user_subscribed(update.effective_user.id, context):
+            await query.answer("✅ تم التحقق بنجاح! أهلاً بك.", show_alert=True)
+            text = "🌸 **روبوت لارا (V5.9 Legendary):**\n\n✨ اختر من القائمة أدناه:"
+            await query.message.edit_text(text, reply_markup=get_main_keyboard(bot_obj.username, uid == ADMIN_ID), parse_mode=None)
         else:
-            await query.answer("❌ لم تشترك في القناة بعد! يرجى الاشتراك أولاً.", show_alert=True)
+            await query.answer("❌ لم تشترك في القناة بعد! يرجى الاشتراك في القناة أولاً.", show_alert=True)
     elif data == "owner_subs":
         await handle_owner_subs_callback(update, context)
     elif data == "cmd_group":
