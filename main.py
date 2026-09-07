@@ -8,8 +8,9 @@ async def is_user_subscribed(user_id: int, context: ContextTypes.DEFAULT_TYPE) -
     try:
         member = await context.bot.get_chat_member(chat_id=REQUIRED_CHANNEL, user_id=user_id)
         return member.status in ["creator", "administrator", "member"]
-    except Exception:
-        return True
+    except Exception as e:
+        print(f"[Subscription Error]: {e}")
+        return False
 
 async def send_sub_required_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = InlineKeyboardMarkup([
