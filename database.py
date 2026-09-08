@@ -11,6 +11,7 @@ async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit
 class Base(DeclarativeBase): pass
 
 class User(Base):
+    referred_by = Column(Integer, nullable=True)
     invites_count = Column(Integer, default=0)
     points = Column(Integer, default=0)
     last_daily = Column(String, nullable=True)
