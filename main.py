@@ -89,6 +89,7 @@ import psutil
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions
 )
+from main_vip import handle_vip_menu
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, filters, ConversationHandler
@@ -238,7 +239,8 @@ async def check_bad_words(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 # ====================================================
 def get_main_keyboard(bot_username, is_admin):
     keyboard = [
-        [InlineKeyboardButton("➕ تفعيل البوت بمجموعة", url=f"https://t.me/{bot_username}?startgroup=true")],
+        [InlineKeyboardButton("💎 ميزات VIP الحصرية", callback_data="vip_menu")],
+            [InlineKeyboardButton("➕ تفعيل البوت بمجموعة", url=f"https://t.me/{bot_username}?startgroup=true")],
         [InlineKeyboardButton("📜 أوامر الأعضاء", callback_data="cmd_user"), InlineKeyboardButton("👮 أوامر المجموعة", callback_data="cmd_group")],
         [InlineKeyboardButton("🎮 الألعاب والترفيه", callback_data="cmd_games"), InlineKeyboardButton("🛠️ أدوات وميديا", callback_data="cmd_tools")],
         [InlineKeyboardButton("💰 نظام الربح الذاتي في سوريا", callback_data="earn_sys")],
@@ -673,6 +675,8 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.edit_text(text, reply_markup=get_main_keyboard(bot_obj.username, uid == ADMIN_ID), parse_mode=None)
         else:
             await query.answer("❌ لم تشترك في القناة بعد! يرجى الاشتراك في القناة أولاً.", show_alert=True)
+    elif data == "vip_menu":
+        await handle_vip_menu(update, context)
     elif data == "owner_subs":
         await handle_owner_subs_callback(update, context)
     elif data == "cmd_group":
