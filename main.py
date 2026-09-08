@@ -575,8 +575,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             await session.commit()
 
-    # إرسال واترحيب المستخدم أو القائمة الرئيسية
-    # (يمكنك وضع رسالة الترحيب أو القائمة هنا حسب تصميم بوتك)
+    # إرسال القائمة الرئيسية للمستخدم بنجاح
+    bot_obj = await context.bot.get_me()
+    main_text = "🌸 **روبوت لارا (V5.9 Legendary):**\n\n✨ اختر من القائمة أدناه:"
+    await update.message.reply_text(
+        main_text,
+        reply_markup=get_main_keyboard(bot_obj.username, user.id == ADMIN_ID),
+        parse_mode="Markdown"
+    )
 
 async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
