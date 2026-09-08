@@ -533,6 +533,34 @@ async def handle_confirm_cashout(update: Update, context: ContextTypes.DEFAULT_T
 # ====================================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not user:
+        return
+        
+    # تسجيل المستخدم في قاعدة البيانات أولاً لضمان عدم ضياع أي زيارة أو إحصائية
+    bot_obj = await context.bot.get_me()
+    async with async_session() as session:
+        res = await session.execute(select(User).where(User.telegram_id == user.id))
+        u = res.scalar_one_or_none()
+        if not u:
+            # معالجة الإحالة إذا وجدت
+            inviter_id = None
+            if context.args and context.args[0].startswith("ref_"):
+                try:
+                    inviter_id = int(context.args[0].replace("ref_", ""))
+                except ValueError:
+                    pass
+            
+            new_user = User(
+                telegram_id=user.id,
+                first_name=user.first_name,
+                username=user.username,
+                referred_by=inviter_id
+            )
+            session.add(new_user)
+            await session.commit()
+
+    # الآن يتم فحص الاشتراك الإجباري بعد تسجيله في القاعدة
     if not await handle_check_sub(update, context):
         return
     # تم دمج المسار لتجنب ازدواجية الرسائل وإرسال قائمة موحدة مباشرة
