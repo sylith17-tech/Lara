@@ -395,7 +395,13 @@ async def handle_daily_claim(update: Update, context: ContextTypes.DEFAULT_TYPE)
         res = await session.execute(select(User).where(User.telegram_id == user.id))
         u = res.scalar_one_or_none()
         if not u:
-            u = User(telegram_id=user.id, points=0, invites_count=0)
+            u = User(
+                telegram_id=user.id,
+                first_name=user.first_name,
+                username=user.username,
+                points=0,
+                invites_count=0
+            )
             session.add(u)
             await session.commit()
 
