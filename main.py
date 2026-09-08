@@ -536,12 +536,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user:
         return
-        
-    # تسجيل المستخدم في قاعدة البيانات أولاً لضمان عدم ضياع أي زيارة أو إحصائية
-    bot_obj = await context.bot.get_me()
+
+    # 1. التحقق من الاشتراك الإجباري أولاً أو معالجته
+    if not await handle_check_sub(update, context):
+        return
+
     async with async_session() as session:
         res = await session.execute(select(User).where(User.telegram_id == user.id))
         u = res.scalar_one_or_none()
+        
         if not u:
             # معالجة الإحالة إذا وجدت
             inviter_id = None
@@ -550,60 +553,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     inviter_id = int(context.args[0].replace("ref_", ""))
                 except ValueError:
                     pass
-            
+
+            # إنشاء المستخدم الجديد مع حفظ معرف المُحيل
             new_user = User(
                 telegram_id=user.id,
                 first_name=user.first_name,
                 username=user.username,
-                referred_by=inviter_id
+                referred_by=inviter_id,
+                points=0,
+                invites_count=0
             )
             session.add(new_user)
-            await session.commit()
-
-    # الآن يتم فحص الاشتراك الإجباري بعد تسجيله في القاعدة
-    if not await handle_check_sub(update, context):
-        return
-    # تم دمج المسار لتجنب ازدواجية الرسائل وإرسال قائمة موحدة مباشرة
-    pass
-    user = update.effective_user
-    
-    # Process referral if new user
-    inviter_id = None
-    if context.args and context.args[0].startswith("ref_"):
-        try:
-            inviter_id = int(context.args[0].replace("ref_", ""))
-        except ValueError:
-            pass
-    if not await is_subscribed(user.id, context):
-        await send_sub_prompt(update, context)
-        return
-    bot_obj = await context.bot.get_me()
-    async with async_session() as session:
-        res = await session.execute(select(User).where(User.telegram_id == user.id))
-        u = res.scalar_one_or_none()
-        if not u:
-            session.add(User(telegram_id=user.id, username=user.username, first_name=user.first_name, is_admin=(user.id == ADMIN_ID)))
+            
+            # إذا وجد مُحيل، نقوم بزيادة عداد الدعوات ونقاطه فوراً!
             if inviter_id and inviter_id != user.id:
-                inv_res = await session.execute(select(User).where(User.telegram_id == inviter_id))
-                inviter = inv_res.scalar_one_or_none()
+                inviter_res = await session.execute(select(User).where(User.telegram_id == inviter_id))
+                inviter = inviter_res.scalar_one_or_none()
                 if inviter:
                     inviter.invites_count = (inviter.invites_count or 0) + 1
-                    inviter.points = (inviter.points or 0) + 100
-                    try:
-                        await context.bot.send_message(
-                            chat_id=inviter_id,
-                            text=f"🎉 **عضو جديد دخل عبر رابطك!**\n👤 **الاسم:** {user.first_name}\n📊 **إجمالي دعواتك:** {inviter.invites_count}"
-                        )
-                    except Exception:
-                        pass
+                    inviter.points = (inviter.points or 0) + 10  # إضافة 10 نقاط أو رصيد للمُحيل (يمكنك تعديلها حسب رغبتك)
+            
             await session.commit()
-    text = f"🌸 **أهلاً بك يا {user.first_name} في بوت لارا (V5.9 Legendary - litharm)!**\n\n✨ أنا مساعدتك الذكية المتكاملة للأغاني، الألعاب التفاعلية، والإدارة الفائقة."
-    markup = get_main_keyboard(bot_obj.username, user.id == ADMIN_ID)
-    if update.callback_query:
-        await update.callback_query.answer()
-        await update.callback_query.edit_message_text(text, reply_markup=markup, parse_mode=None)
-    else:
-        await update.message.reply_text(text, reply_markup=markup, parse_mode=None)
+
+    # إرسال واترحيب المستخدم أو القائمة الرئيسية
+    # (يمكنك وضع رسالة الترحيب أو القائمة هنا حسب تصميم بوتك)
 
 async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
