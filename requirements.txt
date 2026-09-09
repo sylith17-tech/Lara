@@ -9,3 +9,6 @@ psutil
 gTTS
 requests
 Flask
+opencv-python-headless
+Pillow
+moviepy
