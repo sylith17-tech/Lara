@@ -7,13 +7,13 @@ async def handle_vip_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """عرض لوحة تحكم الـ VIP الرئيسية"""
     query = update.callback_query
     await query.answer("🟢 أهلاً بك في قسم الـ VIP المتقدم!", show_alert=False)
-
+    
     keyboard = [
         [InlineKeyboardButton("🎬 بدء تعديل فيديو جديد (AI)", callback_data="start_video_edit")],
         [InlineKeyboardButton("📊 إحصائيات الموارد والنظام", callback_data="vip_stats")],
         [InlineKeyboardButton("🔙 العودة للقائمة الرئيسية", callback_data="main_menu")]
     ]
-    
+
     panel_text = (
         "╭━━━ 🟢 **[ لوحة تحكم VIP_ARM الحصرية ]** 🟢━━━╮\n\n"
         "┃ 🎥 **مرحباً بك في المحرك الاحترافي لمعالجة الفيديوهات.**\n"
@@ -40,7 +40,7 @@ async def handle_start_video_edit(update: Update, context: ContextTypes.DEFAULT_
     keyboard = [
         [InlineKeyboardButton("❌ إلغاء ورجوع", callback_data="vip_menu")]
     ]
-    
+
     session_text = (
         "╭━━━ 📥 **[ استلام الفيديو - الجلسة نشطة ]** 📥━━━╮\n\n"
         "┃ 🆔 معرف الجلسة: `{job_id}`\n"
@@ -48,7 +48,7 @@ async def handle_start_video_edit(update: Update, context: ContextTypes.DEFAULT_
         "┃ ⏳ بانتظار تلقي ملف الفيديو للبدء بالمعالجة.\n\n"
         "╰──────────────────────────────╯"
     ).format(job_id=job_info['job_id'])
-    
+
     await query.message.edit_text(
         session_text,
         reply_markup=InlineKeyboardMarkup(keyboard),
@@ -71,7 +71,7 @@ async def handle_vip_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "┃ ⚡ محرك المعالجة: **FFmpeg + AI Planner جاهز للاستخدام**\n\n"
         "╰──────────────────────────────╯"
     )
-    
+
     await query.message.edit_text(
         stats_text,
         reply_markup=InlineKeyboardMarkup(keyboard),
