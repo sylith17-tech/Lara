@@ -77,3 +77,29 @@ async def handle_vip_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown"
     )
+
+
+async def handle_incoming_video(update, context):
+    """التقاط واستقبال الفيديو المرسل عندما تكون الجلسة نشطة"""
+    if not context.user_data.get('waiting_for_video'):
+        return
+
+    message = update.message
+    if not message.video:
+        return
+
+    status_msg = await message.reply_text("📥 **جاري استقبال وتنزيل الفيديو... انتظر قليلاً**", parse_mode="Markdown")
+    
+    try:
+        video_file = await context.bot.get_file(message.video.file_id)
+        job_info = context.user_data.get('current_job', {})
+        
+        context.user_data['waiting_for_video'] = False
+        
+        await status_msg.edit_text(
+            "✅ **تم استلام الفيديو بنجاح!**\n\n"
+            "⚡ جاري تحليل الطلب وتطبيق التعديل المطلوب عبر المحرك الاحترافي...",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        await status_msg.edit_text(f"❌ حدث خطأ أثناء استقبال أو تنزيل الفيديو: {e}")
