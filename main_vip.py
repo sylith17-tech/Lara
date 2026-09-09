@@ -79,8 +79,13 @@ async def handle_vip_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+
+
+# مجموعة لتتبع المستخدمين الذين ينتظرون إدخال نص الذكاء الاصطناعي فقط
+ACTIVE_AI_USERS = set()
+
 async def handle_incoming_video(update, context):
-    """التقاط واستقبال الفيديو المرسل عندما تكون الجلسة نشطة"""
+    """استقبال الفيديو وتفعيل حالة انتظار الوصف لهذا المستخدم فقط"""
     if not context.user_data.get('waiting_for_video'):
         return
 
@@ -88,53 +93,31 @@ async def handle_incoming_video(update, context):
     if not message.video:
         return
 
-    status_msg = await message.reply_text("📥 **جاري استقبال وتنزيل الفيديو... انتظر قليلاً**", parse_mode="Markdown")
-    
-    try:
-        video_file = await context.bot.get_file(message.video.file_id)
-        job_info = context.user_data.get('current_job', {})
-        
-        context.user_data['waiting_for_video'] = False
-        
-        await status_msg.edit_text(
-            "✅ **تم استلام الفيديو بنجاح!**\n\n"
-            "⚡ جاري تحليل الطلب وتطبيق التعديل المطلوب عبر المحرك الاحترافي...",
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        await status_msg.edit_text(f"❌ حدث خطأ أثناء استقبال أو تنزيل الفيديو: {e}")
-
-
-async def handle_incoming_video(update, context):
-    """استقبال الفيديو وتفعيل حالة انتظار الوصف النصي من المستخدم"""
-    if not context.user_data.get('waiting_for_video'):
-        return
-
-    message = update.message
-    if not message.video:
-        return
-
+    user_id = update.effective_user.id
     context.user_data['temp_video_file_id'] = message.video.file_id
     context.user_data['waiting_for_video'] = False
-    context.user_data['waiting_for_ai_prompt'] = True
+    
+    # تفعيل الحالة لهذا المستخدم بالذات
+    ACTIVE_AI_USERS.add(user_id)
 
     await message.reply_text(
         "📥 **تم استلام الفيديو بنجاح!**\n\n"
         "🤖 **أنا جاهز الآن:** اكتب لي بالعربي ماذا تريد أن أفعل بالفيديو?\n"
-        "(مثال: *قص أول 5 ثواني*، *تصغير الحجم*، *تحويل مباشر*)...",
+        "(مثال: *قص أول 5 ثواني*، *تصغير الحجم*)...",
         parse_mode="Markdown"
     )
 
 async def handle_ai_video_prompt(update, context):
-    """استقبال الوصف النصي وتحليله وتطبيق التعديل"""
-    if not context.user_data.get('waiting_for_ai_prompt'):
-        return
+    """استقبال الوصف النصي للمستخدم النشط فقط وتطبيق التعديل"""
+    user_id = update.effective_user.id
+    if user_id not in ACTIVE_AI_USERS:
+        return  # تجاهل تاما لأي شخص لا يقوم بتعديل فيديو حالياً
 
     text_prompt = update.message.text
     video_file_id = context.user_data.get('temp_video_file_id')
     
     if not video_file_id:
-        context.user_data['waiting_for_ai_prompt'] = False
+        ACTIVE_AI_USERS.discard(user_id)
         return
 
     status_msg = await update.message.reply_text("🧠 **جاري تحليل طلبك بالذكاء الاصطناعي وتجهيز المحرك...**", parse_mode="Markdown")
@@ -144,8 +127,8 @@ async def handle_ai_video_prompt(update, context):
         import subprocess
         
         video_file = await context.bot.get_file(video_file_id)
-        input_path = f"input_{update.effective_user.id}.mp4"
-        output_path = f"output_{update.effective_user.id}.mp4"
+        input_path = f"input_{user_id}.mp4"
+        output_path = f"output_{user_id}.mp4"
         await video_file.download_to_drive(input_path)
 
         cmd = ["ffmpeg", "-y", "-i", input_path, "-vcodec", "libx264", "-crf", "26", output_path]
@@ -157,6 +140,7 @@ async def handle_ai_video_prompt(update, context):
         
         if process.returncode != 0:
             await status_msg.edit_text("❌ حدث خطأ أثناء تطبيق التعديل بالمحرك.")
+            ACTIVE_AI_USERS.discard(user_id)
             return
 
         with open(output_path, "rb") as vid:
@@ -167,11 +151,12 @@ async def handle_ai_video_prompt(update, context):
             )
         
         await status_msg.delete()
-        context.user_data['waiting_for_ai_prompt'] = False
         
+        # تنظيف الحالة والملفات
+        ACTIVE_AI_USERS.discard(user_id)
         if os.path.exists(input_path): os.remove(input_path)
         if os.path.exists(output_path): os.remove(output_path)
 
     except Exception as e:
         await status_msg.edit_text(f"❌ حدث خطأ تقني: {e}")
-        context.user_data['waiting_for_ai_prompt'] = False
+        ACTIVE_AI_USERS.discard(user_id)

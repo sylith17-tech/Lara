@@ -1,3 +1,14 @@
+from main_vip import handle_vip_menu, handle_incoming_video
+
+from telegram.ext.filters import MessageFilter
+from main_vip import ACTIVE_AI_USERS, handle_ai_video_prompt
+
+class AILimitFilter(MessageFilter):
+    def filter(self, message):
+        if not message or not message.from_user:
+            return False
+        return message.from_user.id in ACTIVE_AI_USERS
+
 from datetime import date
 
 REQUIRED_CHANNEL = "@VIP_ARM0"
@@ -1427,6 +1438,7 @@ def main():
 
     app.add_handler(MessageHandler(filters.VIDEO, handle_incoming_video))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_video_prompt))
+    app.add_handler(MessageHandler(AILimitFilter() & ~filters.COMMAND, handle_ai_video_prompt))
     app.add_handler(CallbackQueryHandler(button_router))
     app.add_handler(CallbackQueryHandler(cmd_referral, pattern='^cmd_referral$'))
     
