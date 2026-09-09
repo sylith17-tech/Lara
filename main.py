@@ -89,7 +89,7 @@ import psutil
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions
 )
-from main_vip import handle_vip_menu, handle_incoming_video, handle_start_video_edit, handle_vip_stats
+from main_vip import handle_vip_menu, handle_ai_video_prompt, handle_incoming_video, handle_start_video_edit, handle_vip_stats
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, filters, ConversationHandler
@@ -1426,6 +1426,7 @@ def main():
     app.add_handler(broadcast_conv)
 
     app.add_handler(MessageHandler(filters.VIDEO, handle_incoming_video))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_video_prompt))
     app.add_handler(CallbackQueryHandler(button_router))
     app.add_handler(CallbackQueryHandler(cmd_referral, pattern='^cmd_referral$'))
     
