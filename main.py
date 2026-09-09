@@ -1,4 +1,4 @@
-from main_vip import handle_vip_menu, handle_incoming_video
+from main_vip import handle_vip_menu, video_edit_init, video_receive_file, video_process_and_reply, cancel_video_edit, WAIT_VIDEO, WAIT_PROMPT, ConversationHandler, handle_incoming_video
 
 from telegram.ext.filters import MessageFilter
 from main_vip import ACTIVE_AI_USERS, handle_ai_video_prompt
@@ -100,7 +100,7 @@ import psutil
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions
 )
-from main_vip import handle_vip_menu, handle_ai_video_prompt, handle_incoming_video, handle_start_video_edit, handle_vip_stats
+from main_vip import handle_vip_menu, video_edit_init, video_receive_file, video_process_and_reply, cancel_video_edit, WAIT_VIDEO, WAIT_PROMPT, ConversationHandler, handle_ai_video_prompt, handle_incoming_video, handle_start_video_edit, handle_vip_stats
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, filters, ConversationHandler
@@ -1433,6 +1433,16 @@ def main():
     app.add_handler(CommandHandler("xo", cmd_xo))
 
     app.add_handler(reply_conv)
+        # معالج محادثة تعديل الفيديو الآمن
+    video_edit_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(video_edit_init, pattern="^btn_video_edit$")],
+        states={
+            WAIT_VIDEO: [MessageHandler(filters.VIDEO, video_receive_file)],
+            WAIT_PROMPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, video_process_and_reply)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_video_edit), MessageHandler(filters.COMMAND, cancel_video_edit)],
+    )
+    app.add_handler(video_edit_conv)
     app.add_handler(sug_conv)
     app.add_handler(broadcast_conv)
 
