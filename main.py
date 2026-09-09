@@ -89,7 +89,7 @@ import psutil
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions
 )
-from main_vip import handle_vip_menu
+from main_vip import handle_vip_menu, handle_start_video_edit, handle_vip_stats
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, filters, ConversationHandler
@@ -677,6 +677,10 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ لم تشترك في القناة بعد! يرجى الاشتراك في القناة أولاً.", show_alert=True)
     elif data == "vip_menu":
         await handle_vip_menu(update, context)
+    elif data == "start_video_edit":
+        await handle_start_video_edit(update, context)
+    elif data == "vip_stats":
+        await handle_vip_stats(update, context)
     elif data == "owner_subs":
         await handle_owner_subs_callback(update, context)
     elif data == "cmd_group":
