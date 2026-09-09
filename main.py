@@ -1447,8 +1447,10 @@ def main():
     app.add_handler(broadcast_conv)
 
     app.add_handler(MessageHandler(filters.VIDEO, handle_incoming_video))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_video_prompt))
-    app.add_handler(MessageHandler(AILimitFilter() & ~filters.COMMAND, handle_ai_video_prompt))
+    # تم إزالة المعالج العشوائي لتجنب التعارض:
+    # app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_video_prompt))
+    # تم إزالة المعالج العشوائي لتجنب التعارض:
+    # app.add_handler(MessageHandler(AILimitFilter() & ~filters.COMMAND, handle_ai_video_prompt))
     app.add_handler(CallbackQueryHandler(button_router))
     app.add_handler(CallbackQueryHandler(cmd_referral, pattern='^cmd_referral$'))
     
