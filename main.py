@@ -1308,17 +1308,54 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 8. الدردشة الذكية مع لارا
     if text.startswith("لارا "):
-        query_ai = text.replace("لارا ", "").strip()
-        if not query_ai or query_ai in ["نكتة", "نكت", "قصف", "احكي", "اختراق", "نسبة الحب"]: return
+        query_ai = text.replace("لارا ", "", 1).strip()
 
-        ai_replies = {
-            "من انت": "أنا لارا، مساعدتك الذكية والمطورة بواسطة المبدع litharm! 🌸",
-            "كيفك": "بأفضل حال والحمد لله! كيف أساعدك اليوم؟ ✨",
-            "من طورك": "تم برمجتي بواسطة المطور الأسطوري litharm 🚀"
-        }
-        for k, v in ai_replies.items():
-            if k in query_ai: return await update.message.reply_text(v)
-        return await update.message.reply_text(f"🤖 **لارا:** أنا هنا معك بخصوص `{query_ai}`. أقدر أساعدك بأي شيء تحتاجه!", parse_mode=None)
+        if not query_ai or query_ai in ["نكتة", "نكت", "قصف", "احكي", "اختراق", "نسبة الحب"]:
+            return
+
+        # Keep existing admin commands independent from chat.
+        admin_chat_bypass = [
+            "لارا طردي", "لارا اطردي", "لارا كتمي", "لارا اكتمي",
+            "لارا فك الكتم", "لارا فكي الكتم", "لارا الغاء كتم", "لارا حذري", "لارا تحذير",
+            "لارا ثبتي", "لارا تثبيت", "لارا اقفلي",
+            "لارا قفل المحادثة", "لارا إغلاق المحادثة",
+            "لارا افتحي", "لارا فتح المحادثة", "لارا فتح الجروب",
+            "لارا قفل الجروب",
+            "طرد", "اطردي", "كتم", "اكتمي", "فك الكتم",
+            "الغاء كتم", "حذري", "تحذير", "ثبتي", "تثبيت",
+            "اقفلي", "قفل المحادثة", "إغلاق المحادثة",
+            "افتحي", "فتح المحادثة", "فتح الجروب", "قفل الجروب",
+        ]
+
+        if any(text == cmd or text.startswith(cmd + " ") for cmd in admin_chat_bypass):
+            pass
+        else:
+            ai_replies = {
+                "من انت": "أنا لارا، مساعدتك الذكية والمطورة بواسطة المبدع litharm! 🌸",
+                "كيفك": "بأفضل حال والحمد لله! كيف أساعدك اليوم؟ ✨",
+                "من طورك": "تم برمجتي بواسطة المطور الأسطوري litharm 🚀"
+            }
+
+            for k, v in ai_replies.items():
+                if k in query_ai:
+                    return await update.message.reply_text(v)
+
+            # Use the local Arabic dialogue engine only as the chat fallback.
+            from arsyra.engine import ask as arsyra_ask
+
+            arsyra_reply = arsyra_ask(query_ai)
+
+            if arsyra_reply:
+                return await update.message.reply_text(
+                    f"🤖 **لارا:** {arsyra_reply}",
+                    parse_mode=None,
+                )
+
+            # Preserve the old fallback when the dataset has no reliable match.
+            return await update.message.reply_text(
+                f"🤖 **لارا:** أنا هنا معك بخصوص `{query_ai}`. أقدر أساعدك بأي شيء تحتاجه!",
+                parse_mode=None,
+            )
 
     # 9. نظام الإدارة المحمي الشامل للمجموعات (خاص بالمشرفين فقط)
     if is_group:
