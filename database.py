@@ -24,6 +24,19 @@ class User(Base):
     is_banned: Mapped[bool] = mapped_column(Boolean, default=False)
     stars_donated: Mapped[int] = mapped_column(Integer, default=0)
 
+
+class ModerationWarning(Base):
+    __tablename__ = 'moderation_warnings'
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    total_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_reason: Mapped[str] = mapped_column(Text, nullable=True)
+    last_message_id: Mapped[int] = mapped_column(BigInteger, nullable=True)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=True)
+
 class AutoReply(Base):
     __tablename__ = 'auto_replies'
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -56,6 +69,10 @@ class GroupSettings(Base):
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_moderation_warnings_chat_user "
+            "ON moderation_warnings (chat_id, user_id)"
+        ))
         for col, col_type in [("invites_count", "INTEGER DEFAULT 0"), ("points", "INTEGER DEFAULT 0"), ("last_daily", "VARCHAR")]:
             try:
                 await conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} {col_type}"))

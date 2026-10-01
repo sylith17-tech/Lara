@@ -106,7 +106,7 @@ from telegram.ext import (
     ContextTypes, filters, ConversationHandler
 )
 from sqlalchemy import select, func
-from database import GroupSettings, init_db, async_session, User, AutoReply, Suggestion
+from database import GroupSettings, init_db, async_session, User, AutoReply, Suggestion, ModerationWarning
 
 # ====================================================
 # --- سيرفر وهمي للعمل على Render ---
@@ -231,19 +231,366 @@ def get_system_telemetry() -> str:
     except Exception as e:
         return f"⚠️ خطأ جلب الإحصائيات: {e}"
 
+
+def _normalize_moderation_text(text: str) -> str:
+    """Normalize Arabic/Latin text to make common obfuscation harder."""
+    import re
+    if not text:
+        return ""
+
+    text = text.lower()
+
+    replacements = {
+        "أ": "ا", "إ": "ا", "آ": "ا", "ٱ": "ا",
+        "ى": "ي", "ئ": "ي", "ؤ": "و",
+        "ة": "ه", "ـ": "",
+        "٠": "0", "١": "1", "٢": "2", "٣": "3", "٤": "4",
+        "٥": "5", "٦": "6", "٧": "7", "٨": "8", "٩": "9",
+    }
+    text = "".join(replacements.get(ch, ch) for ch in text)
+
+    # Remove invisible/control characters and collapse separators.
+    text = re.sub(r"[\u200b-\u200f\u202a-\u202e\ufeff]", "", text)
+    text = re.sub(r"[\W_]+", " ", text, flags=re.UNICODE)
+    text = re.sub(r"(.)\1{2,}", r"\1\1", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+# Core phrases are intentionally kept separate from the old placeholder filter.
+# This makes the moderation engine easy to expand without changing handle_msg.
+MODERATION_OFFENSIVE_TERMS = {
+    # إهانات عامة
+    "غبي", "غبية", "غباء", "احمق", "أحمق", "حمقاء", "احمقك",
+    "معتوه", "معتوهة", "اهبل", "أهبل", "هبلة", "متخلف", "متخلفة",
+    "تافه", "تافهة", "سخيف", "سخيفة", "سفيه", "سفيهة",
+    "حقير", "حقيرة", "وضيع", "وضيعة", "سافل", "سافلة",
+    "قذر", "قذرة", "وسخ", "وسخة", "نجس", "نجسة", "مقرف", "مقرفة",
+    "خبيث", "خبيثة", "كذاب", "كذابة", "كذابين", "كاذب", "كاذبة",
+    "نصاب", "نصابة", "منافق", "منافقة", "خائن", "خائنة",
+    "عديم الشرف", "عديمة الشرف", "جبان", "جبانة",
+    "فاشل", "فاشلة", "فاشلين", "فاشلات",
+    "تافهين", "تافهات", "اغبياء", "أغبياء", "غبيان",
+    "احمقين", "حمقاء", "مهبول", "مهبولة", "مهابيل",
+    "مخبول", "مخبولة", "مجانين", "مجنون", "مجنونة",
+    "مختل", "مختلة", "مريض", "مريضة", "مقرفين", "وسخين",
+    "قذرين", "حقيرين", "سافلين", "تافهين", "سخيفين",
+
+    # تشبيهات وإهانات حيوانية
+    "كلب", "كلبة", "كلاب", "كلابك", "كلبين", "كلبات",
+    "حمار", "حمارة", "حمير", "حميرك", "حميرين",
+    "جحش", "جحشة", "جحوش", "جحوشك",
+    "بغل", "بغلة", "بغال", "بغلك",
+    "خنزير", "خنزيرة", "خنازير",
+    "جرذ", "جرذان", "جرذون",
+    "قرد", "قردة", "قرود",
+    "حشرة", "حشرات", "دودة", "ديدان",
+    "صرصور", "صراصير", "ذباب", "بعوضة", "بعوض",
+    "ثعلب", "ثعالب", "ضفدع", "ضفادع",
+    "كلبة", "كلبوس", "خروف", "خرفان",
+    "ثور", "ثيران", "بقرة", "بقر",
+    "حيوان", "حيوانات", "حيواناتك",
+    "يا حيوان", "يا حيوانات", "يا كلب", "يا كلاب",
+    "يا حمار", "يا حمير", "يا جحش", "يا خنزير",
+    "يا قرد", "يا جرذ", "يا حشرة", "يا بغل",
+
+    # ألفاظ نابية وعبارات بذيئة
+    "زبالة", "زباله", "زفت", "قرف", "خرا", "خراء",
+    "خرا عليك", "خرا فيك", "خرا بوجهك", "خرا بوجهك",
+    "خرا عليك وعلى", "كل خرا", "روح كل خرا", "اكل خرا",
+    "تباً لك", "تبا لك", "تباً إلك", "تبا إلك",
+    "تباً عليك", "تبا عليك", "يلعن شكلك", "يلعن وجهك",
+    "يلعن أبوك", "يلعن ابوك", "يلعن امك", "يلعن أمك",
+    "يلعن امك وابوك", "يلعن جدك", "يلعن اجدادك",
+    "يلعن اصلك", "يلعن نسلك", "يلعن حظك",
+    "ملعون", "ملعونة", "ملعونين", "ملعونينك",
+    "الله يلعنك", "الله لا يوفقك", "الله ياخذك",
+    "الله ينتقم منك", "الله لا يردك", "الله لا يبارك فيك",
+    "فشرت", "فشر", "فاشل", "فاشلة",
+    "انطم", "انطمي", "اسكت", "اسكتي", "خرس",
+    "خرسي", "حل عني", "حل عن وجهي", "روح عني",
+
+    # إهانات عائلية مركبة
+    "ابن الحرام", "بنت الحرام", "ولد الحرام", "اولاد الحرام",
+    "أولاد الحرام", "ابن الكلب", "بنت الكلبة", "ولد الكلب",
+    "اولاد الكلب", "أولاد الكلب",
+    "ابن الوسخة", "بنت الوسخة", "ولد الوسخ", "اولاد الوسخ",
+    "أولاد الوسخ", "ابن القحبة", "بنت القحبة", "ولد القحبة",
+    "اولاد القحاب", "أولاد القحاب",
+    "ابن الشرموطة", "بنت الشرموطة", "ولد الشرموطة",
+    "اولاد الشرموطة", "ابن الزانية", "بنت الزانية", "ولد الزانية",
+    "ابن الفاجرة", "بنت الفاجر", "ابن الساقطة", "بنت الساقط",
+    "ابن الكذا", "بنت الكذا", "ولد الكذا",
+
+    # ألفاظ جنسية/مهينة صريحة شائعة
+    "شرموط", "شرموطة", "شراميط", "شرموطات",
+    "قحبة", "قحاب", "قحبات", "قحبه", "قحابك",
+    "عاهر", "عاهرة", "عاهرات", "زاني", "زانية", "زناة",
+    "فاجر", "فاجرة", "فاجرين", "فاسق", "فاسقة",
+    "ساقط", "ساقطة", "ساقطين", "منيك", "منيكة",
+    "مخنث", "مخنثة", "ديوث", "ديوثة",
+    "عرص", "عراص", "عرصات", "منيوك",
+    "منيوكة", "لوطي", "لواطي", "سحاقية",
+    "شرموطه", "قحبه", "عهر", "دعارة", "زنا",
+    "فجور", "فسق",
+
+    # إهانات باللهجة الشامية/السورية
+    "روح انقلع", "انقلع", "انقلعي", "انقلع من هون",
+    "انقلع من وجهي", "انطم", "انطمي",
+    "دبر حالك", "حل عني", "حل عن وجهي",
+    "فك عني", "فكنا منك", "خلصنا منك",
+    "لا تقرفني", "قرفتني", "قرفتنا",
+    "يا غبي", "يا اهبل", "يا أهبل", "يا معتوه",
+    "يا متخلف", "يا قذر", "يا وسخ", "يا حقير",
+    "يا سافل", "يا تافه", "يا سخيف", "يا جبان",
+    "يا فاشل", "يا كذاب", "يا نصاب", "يا منافق",
+    "يا خائن", "يا نجس", "يا مقرف", "يا مهبول",
+    "يا مجنون", "يا مخبول", "يا مختل",
+    "شو هالغبا", "شو هالغباء", "شو هالحماقة",
+    "شو هالتخلف", "شو هالقرف", "شو هالوساخة",
+    "شو هالزبالة", "شو هالسخافة",
+
+    # لهجات وصيغ عامية إضافية
+    "هبل", "هبلة", "هبلان", "هبيلة", "هبيل",
+    "غبا", "غباء", "غبيان", "غبيّة",
+    "حماقة", "احمق", "أحمق", "حمق",
+    "تخلف", "متخلف", "متخلفة", "متخلفين",
+    "وساخة", "وسخ", "وسخة", "وسخين",
+    "قذارة", "قذر", "قذرة", "قذرين",
+    "حقارة", "حقير", "حقيرة", "حقيرين",
+    "سفالة", "سافل", "سافلة", "سافلين",
+    "تفاهة", "تافه", "تافهة", "تافهين",
+    "سخافة", "سخيف", "سخيفة", "سخيفين",
+    "نجاسة", "نجس", "نجسة",
+    "كذب", "كذاب", "كذابة", "كذابين",
+    "نصب", "نصاب", "نصابة", "نصابين",
+    "نفاق", "منافق", "منافقة", "منافقين",
+
+    # صيغ مخاطبة وإهانات مركبة
+    "يا ابن الكلب", "يا ابن الحرام", "يا ابن الوسخة",
+    "يا ابن القحبة", "يا ابن الشرموطة",
+    "يا بنت الكلب", "يا بنت الحرام", "يا بنت الوسخة",
+    "يا بنت القحبة", "يا بنت الشرموطة",
+    "يا ولد الكلب", "يا ولد الحرام", "يا ولد الوسخة",
+    "يا ولد القحبة", "يا ولد الشرموطة",
+    "روح يا كلب", "روح يا حمار", "روح يا حيوان",
+    "روح يا غبي", "روح يا اهبل", "روح يا قذر",
+    "روح يا وسخ", "روح يا حقير", "روح يا تافه",
+    "اسكت يا غبي", "اسكت يا حمار", "اسكت يا كلب",
+    "انطم يا غبي", "انطم يا حمار", "انطم يا كلب",
+
+    # صيغ هجائية وأخطاء شائعة
+    "غبييي", "غبيييي", "غبييييي",
+    "اهبللل", "اهبلللل", "أهبللل",
+    "احمقكك", "احمقق", "حمارر", "حماررر",
+    "كلبب", "كلببب", "وسخخ", "وسخخخ",
+    "قذرر", "قذررر", "خراا", "خرااا",
+    "زبالهه", "زبالةة", "قحبهه", "قحبةة",
+    "شرموطه", "شرموط", "شرموطط",
+    "منيكك", "عرصص", "ديوثث",
+    "معتوهه", "معتوههه", "متخلفف", "متخلففف",
+    "سافلل", "حقيرر", "تافهه", "سخيفف",
+    "كذابب", "كذاببب", "نصابب", "منافقق",
+
+    # صيغ بدون مسافات شائعة
+    "ياكلب", "ياحمار", "ياحيوان", "ياغبي", "ياهبل",
+    "ياقذر", "ياوسخ", "ياحقير", "ياسافل", "ياتافه",
+    "يابنكلب", "يابنحرام", "يابنقحبة", "يابنشرموطة",
+    "روحانقلع", "روحكلخرا", "كلخرا", "يلعنك",
+
+    # عبارات إهانة إضافية
+    "عديم الادب", "عديم الأدب", "قليل الادب", "قليل الأدب",
+    "ما عندك ادب", "ما عندك أدب", "ما عندك احترام",
+    "انسان تافه", "إنسان تافه", "انسان قذر", "إنسان قذر",
+    "شخص تافه", "شخص قذر", "شخص حقير",
+    "ما بتفهم", "ما تفهم", "ما الك قيمة", "ما إلك قيمة",
+    "ما تسوى", "ما بتسوى", "ولا تسوى",
+    "وجهك نحس", "وجهك قرف", "وجهك زبالة",
+    "عقلك زبالة", "عقلك خرا", "مخك خرا",
+    "مخك تعبان", "مخك فاضي",
+
+    # العناصر القديمة للحفاظ على التوافق
+    "شتمة1", "شتمة2",
+}
+
+
+MODERATION_HIGH_SEVERITY_TERMS = set()
+
+MODERATION_WARNING_LIMIT = 3
+
+
+async def get_moderation_warning(chat_id: int, user_id: int) -> int:
+    async with async_session() as session:
+        result = await session.execute(
+            select(ModerationWarning).where(
+                ModerationWarning.chat_id == chat_id,
+                ModerationWarning.user_id == user_id,
+            )
+        )
+        row = result.scalar_one_or_none()
+        return int(row.count or 0) if row else 0
+
+
+async def get_moderation_warning_stats(chat_id: int, user_id: int) -> tuple[int, int]:
+    async with async_session() as session:
+        result = await session.execute(
+            select(ModerationWarning).where(
+                ModerationWarning.chat_id == chat_id,
+                ModerationWarning.user_id == user_id,
+            )
+        )
+        row = result.scalar_one_or_none()
+        if not row:
+            return 0, 0
+        return int(row.count or 0), int(row.total_count or 0)
+
+
+async def add_moderation_warning(
+    chat_id: int,
+    user_id: int,
+    reason: str,
+    message_id: int | None = None,
+) -> int:
+    """Persist and return the user's current warning count for this group."""
+    import time
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(ModerationWarning).where(
+                ModerationWarning.chat_id == chat_id,
+                ModerationWarning.user_id == user_id,
+            )
+        )
+        row = result.scalar_one_or_none()
+
+        if row is None:
+            row = ModerationWarning(
+                chat_id=chat_id,
+                user_id=user_id,
+                count=1,
+                total_count=1,
+                last_reason=reason,
+                last_message_id=message_id,
+                updated_at=str(int(time.time())),
+            )
+            session.add(row)
+        else:
+            row.count = int(row.count or 0) + 1
+            row.total_count = int(row.total_count or 0) + 1
+            row.last_reason = reason
+            row.last_message_id = message_id
+            row.updated_at = str(int(time.time()))
+
+        await session.commit()
+        return int(row.count)
+
+
+async def reset_moderation_warnings(chat_id: int, user_id: int) -> None:
+    async with async_session() as session:
+        result = await session.execute(
+            select(ModerationWarning).where(
+                ModerationWarning.chat_id == chat_id,
+                ModerationWarning.user_id == user_id,
+            )
+        )
+        row = result.scalar_one_or_none()
+        if row:
+            row.count = 0
+            await session.commit()
+
+
+def analyze_moderation_text(text: str):
+    """
+    Return (matched, severity, reason).
+    This is deliberately local and deterministic; an AI classifier can be
+    layered on later without replacing the persistent warning system.
+    """
+    normalized = _normalize_moderation_text(text)
+
+    if not normalized:
+        return False, 0, None
+
+    # مطابقة دقيقة تمنع التقاط الكلمة داخل كلمة أخرى.
+    # نضع مسافات حول النص والتعبير حتى تعمل الكلمات والعبارات متعددة الكلمات
+    # بشكل صحيح، بينما تبقى الصيغ المكتوبة بدون مسافات التي أضيفت للقائمة مدعومة.
+    padded_text = f" {normalized} "
+
+    for term in MODERATION_HIGH_SEVERITY_TERMS:
+        normalized_term = _normalize_moderation_text(term)
+        if normalized_term and f" {normalized_term} " in padded_text:
+            return True, 3, "إساءة شديدة"
+
+    for term in MODERATION_OFFENSIVE_TERMS:
+        normalized_term = _normalize_moderation_text(term)
+        if normalized_term and f" {normalized_term} " in padded_text:
+            return True, 1, "ألفاظ نابية"
+
+    return False, 0, None
+
+
 async def check_bad_words(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    if update.effective_chat and update.effective_chat.type in ["group", "supergroup"]:
-        if update.message and update.message.text:
-            bad_words = ["شتمة1", "شتمة2"] # أضف الألفاظ غير المرغوبة هنا
-            msg_lower = update.message.text.lower()
-            if any(w in msg_lower for w in bad_words):
-                try:
-                    await update.message.delete()
-                    await update.message.reply_text(f"⚠️ تنبيه: ممنوع استخدام الألفاظ النابية هنا يا {update.message.from_user.first_name}!")
-                except Exception:
-                    pass
-                return True
-    return False
+    if not update.effective_chat or update.effective_chat.type not in ["group", "supergroup"]:
+        return False
+
+    if not update.message or not update.message.text or not update.effective_user:
+        return False
+
+    matched, severity, reason = analyze_moderation_text(update.message.text)
+    if not matched:
+        return False
+
+    user = update.effective_user
+    chat_id = update.effective_chat.id
+
+    # المشرفون ومالك البوت لا يدخلون في نظام التحذيرات التلقائي.
+    try:
+        member = await context.bot.get_chat_member(chat_id, user.id)
+        if member.status in ["administrator", "creator"] or user.id == ADMIN_ID:
+            return False
+    except Exception:
+        pass
+
+    warning_count = await add_moderation_warning(
+        chat_id=chat_id,
+        user_id=user.id,
+        reason=reason or "مخالفة",
+        message_id=update.message.message_id,
+    )
+
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    if warning_count >= MODERATION_WARNING_LIMIT:
+        try:
+            await context.bot.restrict_chat_member(
+                chat_id,
+                user.id,
+                permissions=ChatPermissions(can_send_messages=False),
+            )
+            await reset_moderation_warnings(chat_id, user.id)
+            await context.bot.send_message(
+                chat_id,
+                f"🔇 تم كتم {user.first_name} تلقائياً بعد وصوله إلى "
+                f"{MODERATION_WARNING_LIMIT} تحذيرات بسبب {reason or 'مخالفة قواعد المجموعة'}.",
+            )
+        except Exception:
+            await context.bot.send_message(
+                chat_id,
+                f"⚠️ تم تسجيل التحذير الثالث على {user.first_name}، "
+                "لكن تعذر تنفيذ الكتم تلقائياً.",
+            )
+    else:
+        try:
+            await context.bot.send_message(
+                chat_id,
+                f"⚠️ تحذير لـ {user.first_name}: {reason or 'مخالفة قواعد المجموعة'} "
+                f"({warning_count}/{MODERATION_WARNING_LIMIT}).",
+            )
+        except Exception:
+            pass
+
+    return True
 
 # ====================================================
 # --- أزرار القوائم الأساسية ---
@@ -605,7 +952,42 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
-    await update.message.reply_text(f"🆔 **معلوماتك:**\n👤 الاسم: {u.first_name}\n🔑 الآيدي: `{u.id}`", parse_mode=None)
+    chat = update.effective_chat
+    reply_msg = update.message.reply_to_message if update.message else None
+
+    # عند رد المشرف على رسالة عضو باستخدام "معلوماتي"، اعرض معلومات العضو المستهدف.
+    if reply_msg and chat and chat.type in ["group", "supergroup"]:
+        try:
+            member = await context.bot.get_chat_member(chat.id, u.id)
+            is_admin = member.status in ["administrator", "creator"] or u.id == ADMIN_ID
+        except Exception:
+            is_admin = u.id == ADMIN_ID
+
+        if is_admin and reply_msg.from_user:
+            target = reply_msg.from_user
+            warning_count, total_warning_count = await get_moderation_warning_stats(chat.id, target.id)
+            return await update.message.reply_text(
+                f"👤 **معلومات العضو:**\n"
+                f"الاسم: {target.first_name}\n"
+                f"🔑 الآيدي: `{target.id}`\n"
+                f"⚠️ التحذيرات الحالية: `{warning_count}/{MODERATION_WARNING_LIMIT}`\n"
+        f"📊 إجمالي التحذيرات: `{total_warning_count}`",
+                parse_mode=None,
+            )
+
+    warning_count = 0
+    total_warning_count = 0
+    if chat and chat.type in ["group", "supergroup"]:
+        warning_count, total_warning_count = await get_moderation_warning_stats(chat.id, u.id)
+
+    await update.message.reply_text(
+        f"🆔 **معلوماتك:**\n"
+        f"👤 الاسم: {u.first_name}\n"
+        f"🔑 الآيدي: `{u.id}`\n"
+        f"⚠️ التحذيرات الحالية: `{warning_count}/{MODERATION_WARNING_LIMIT}`\n"
+        f"📊 إجمالي التحذيرات: `{total_warning_count}`",
+        parse_mode=None,
+    )
 
 async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     start_t = time.time()
@@ -1405,14 +1787,28 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await context.bot.restrict_chat_member(chat_id, target.id, permissions=perms)
                         await update.message.reply_text(f"🔊 تم فك الكتم عن **{target.first_name}**.", parse_mode=None)
                     elif text in warn_cmds:
-                        w_key = (chat_id, target.id)
-                        USER_WARNS[w_key] = USER_WARNS.get(w_key, 0) + 1
-                        if USER_WARNS[w_key] >= 3:
-                            await context.bot.restrict_chat_member(chat_id, target.id, permissions=ChatPermissions(can_send_messages=False))
-                            USER_WARNS[w_key] = 0
-                            await update.message.reply_text(f"⚠️ وصل العضو **{target.first_name}** لـ 3 تحذيرات! تم كتمه تلقائياً.", parse_mode=None)
+                        warning_count = await add_moderation_warning(
+                            chat_id=chat_id,
+                            user_id=target.id,
+                            reason="تحذير إداري",
+                            message_id=reply_msg.message_id,
+                        )
+                        if warning_count >= MODERATION_WARNING_LIMIT:
+                            await context.bot.restrict_chat_member(
+                                chat_id,
+                                target.id,
+                                permissions=ChatPermissions(can_send_messages=False),
+                            )
+                            await reset_moderation_warnings(chat_id, target.id)
+                            await update.message.reply_text(
+                                f"⚠️ وصل العضو **{target.first_name}** لـ {MODERATION_WARNING_LIMIT} تحذيرات! تم كتمه تلقائياً.",
+                                parse_mode=None,
+                            )
                         else:
-                            await update.message.reply_text(f"⚠️ تحذير للعضو **{target.first_name}** (`{USER_WARNS[w_key]}/3`).", parse_mode=None)
+                            await update.message.reply_text(
+                                f"⚠️ تحذير للعضو **{target.first_name}** (`{warning_count}/{MODERATION_WARNING_LIMIT}`).",
+                                parse_mode=None,
+                            )
                     elif text in pin_cmds:
                         await context.bot.pin_chat_message(chat_id, reply_msg.message_id)
                         await update.message.reply_text("📌 تم تثبيت الرسالة بنجاح.")
