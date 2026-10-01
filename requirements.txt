@@ -13,3 +13,4 @@ opencv-python-headless
 Pillow
 moviepy
 rapidfuzz>=3.0,<4
+greenlet
