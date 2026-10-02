@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import random
 import re
 import unicodedata
 from pathlib import Path
@@ -231,7 +232,24 @@ SHORT_CHAT_REPLIES = {
 
 def short_chat_answer(text: str) -> str | None:
     query = normalize_arabic(text).strip()
-    return SHORT_CHAT_REPLIES.get(query)
+    answer = SHORT_CHAT_REPLIES.get(query)
+    if answer is None:
+        return None
+    # Keep the established reply among a small set of local natural variants.
+    variants = {
+        "كيفك": ["منيحة الحمدلله 😄 وإنت كيفك؟", "تمام، مبسوطة إني عم بحكي معك 🌷"],
+        "كيف حالك": ["منيحة الحمدلله 😄 وإنت كيفك؟", "تمام، مبسوطة إني عم بحكي معك 🌷"],
+        "شو اخبارك": ["منيحة، شكرًا لسؤالك 😄", "كلشي تمام! شو أخبارك إنت؟ 🌷"],
+        "شو اخبارك لارا": ["منيحة، شكرًا لسؤالك 😄", "كلشي تمام! شو أخبارك إنت؟ 🌷"],
+        "شو عامل": ["موجودة هون وجاهزة أحكي معك 😄", "ولا شي، عم برد على أسئلتك 🌷"],
+        "شو عم تعمل": ["موجودة هون وجاهزة أحكي معك 😄", "عم بحكي معك هلق 😄"],
+        "وينك": ["هون يا أهلا 😄", "موجودة، شو في؟ 🌷"],
+        "صباح الخير": ["صباح الورد 🌷", "يسعد صباحك بكل خير ☀️"],
+        "مرحبا": ["أهلا فيك! شو الأخبار؟ 😄", "يا مية أهلا 🌷"],
+        "اهلا": ["أهلا فيك! شو الأخبار؟ 😄", "يا مية أهلا 🌷"],
+        "هاي": ["هاي 😄 شو أخبارك؟", "أهلا، كيفك اليوم؟ 🌷"],
+    }
+    return random.choice([answer, *variants.get(query, [])])
 
 
 class ArSyraEngine:

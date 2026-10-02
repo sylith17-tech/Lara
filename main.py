@@ -1,4 +1,11 @@
+# Names used in annotations must exist before those declarations.
+from telegram import Update
+from telegram.ext import ContextTypes
 from main_vip import handle_vip_menu, video_edit_init, video_receive_file, video_process_and_reply, cancel_video_edit, WAIT_VIDEO, WAIT_PROMPT, handle_incoming_video
+from handlers.video_editor import (
+    EDITOR_MEDIA_FILTER, handle_editor_media, handle_editor_text, video_editor_callback,
+    video_editor_post_init, video_editor_post_shutdown,
+)
 
 from telegram.ext.filters import MessageFilter
 from main_vip import ACTIVE_AI_USERS, handle_ai_video_prompt
@@ -120,7 +127,6 @@ def run_dummy_server():
     except Exception:
         pass
 
-threading.Thread(target=run_dummy_server, daemon=True).start()
 
 # ====================================================
 # --- نظام النبضات للحفاظ على السيرفر نشطاً 24/7 ---
@@ -135,7 +141,6 @@ def keep_alive_ping():
             pass
         time.sleep(300)
 
-threading.Thread(target=keep_alive_ping, daemon=True).start()
 
 # ====================================================
 # --- الإعدادات الأساسية والثوابت ---
@@ -1688,56 +1693,97 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await status_msg.edit_text(f"❌ فشل تحميل الأغنية: {res.get('error', 'غير متوفرة')}")
         return
 
-    # 8. الدردشة الذكية مع لارا
-    if text.startswith("لارا "):
-        query_ai = text.replace("لارا ", "", 1).strip()
+    # 8. محادثة لارا المحلية: استدعاء واضح أو متابعة قصيرة ترد على لارا.
+    # Keep existing feature/admin dispatch above and below this point intact.
+    admin_chat_bypass = [
+        "لارا طردي", "لارا اطردي", "لارا كتمي", "لارا اكتمي",
+        "لارا فك الكتم", "لارا فكي الكتم", "لارا الغاء كتم", "لارا حذري", "لارا تحذير",
+        "لارا ثبتي", "لارا تثبيت", "لارا اقفلي",
+        "لارا قفل المحادثة", "لارا إغلاق المحادثة",
+        "لارا افتحي", "لارا فتح المحادثة", "لارا فتح الجروب",
+        "لارا قفل الجروب",
+        "طرد", "اطردي", "كتم", "اكتمي", "فك الكتم",
+        "الغاء كتم", "حذري", "تحذير", "ثبتي", "تثبيت",
+        "اقفلي", "قفل المحادثة", "إغلاق المحادثة",
+        "افتحي", "فتح المحادثة", "فتح الجروب", "قفل الجروب",
+    ]
+    is_legacy_admin_text = any(text == cmd or text.startswith(cmd + " ") for cmd in admin_chat_bypass)
+    from arsyra.conversation import is_existing_feature_command, strip_invocation
+    is_legacy_admin_text = is_legacy_admin_text or is_existing_feature_command(strip_invocation(text))
+    if not is_legacy_admin_text:
+        from arsyra.conversation import (
+            InvocationLevel, classify_intent,
+            conversation_context, detect_invocation,
+            is_telegram_command, natural_fallback, strip_invocation,
+        )
 
-        if not query_ai or query_ai in ["نكتة", "نكت", "قصف", "احكي", "اختراق", "نسبة الحب"]:
-            return
+        replied = update.message.reply_to_message
+        replied_user_id = (replied.from_user.id if replied and replied.from_user else None)
+        replied_message_id = replied.message_id if replied else None
+        reply_to_lara = conversation_context.reply_targets_lara(
+            chat_id=chat_id,
+            user_id=uid,
+            replied_message_id=replied_message_id,
+            replied_user_id=replied_user_id,
+            bot_user_id=getattr(context.bot, "id", None),
+        )
+        reply_to_other = bool(replied and not reply_to_lara)
 
-        # Keep existing admin commands independent from chat.
-        admin_chat_bypass = [
-            "لارا طردي", "لارا اطردي", "لارا كتمي", "لارا اكتمي",
-            "لارا فك الكتم", "لارا فكي الكتم", "لارا الغاء كتم", "لارا حذري", "لارا تحذير",
-            "لارا ثبتي", "لارا تثبيت", "لارا اقفلي",
-            "لارا قفل المحادثة", "لارا إغلاق المحادثة",
-            "لارا افتحي", "لارا فتح المحادثة", "لارا فتح الجروب",
-            "لارا قفل الجروب",
-            "طرد", "اطردي", "كتم", "اكتمي", "فك الكتم",
-            "الغاء كتم", "حذري", "تحذير", "ثبتي", "تثبيت",
-            "اقفلي", "قفل المحادثة", "إغلاق المحادثة",
-            "افتحي", "فتح المحادثة", "فتح الجروب", "قفل الجروب",
-        ]
-
-        if any(text == cmd or text.startswith(cmd + " ") for cmd in admin_chat_bypass):
-            pass
-        else:
-            ai_replies = {
-                "من انت": "أنا لارا، مساعدتك الذكية والمطورة بواسطة المبدع litharm! 🌸",
-                "كيفك": "بأفضل حال والحمد لله! كيف أساعدك اليوم؟ ✨",
-                "من طورك": "تم برمجتي بواسطة المطور الأسطوري litharm 🚀"
-            }
-
-            for k, v in ai_replies.items():
-                if k in query_ai:
-                    return await update.message.reply_text(v)
-
-            # Use the local Arabic dialogue engine only as the chat fallback.
-            from arsyra.engine import ask as arsyra_ask
-
-            arsyra_reply = arsyra_ask(query_ai)
-
-            if arsyra_reply:
-                return await update.message.reply_text(
-                    f"🤖 **لارا:** {arsyra_reply}",
-                    parse_mode=None,
-                )
-
-            # Preserve the old fallback when the dataset has no reliable match.
-            return await update.message.reply_text(
-                f"🤖 **لارا:** أنا هنا معك بخصوص `{query_ai}`. أقدر أساعدك بأي شيء تحتاجه!",
-                parse_mode=None,
+        if not is_telegram_command(text) and not is_existing_feature_command(text):
+            decision = conversation_context.decide(
+                chat_id=chat_id,
+                user_id=uid,
+                text=text,
+                reply_to_bot=reply_to_lara,
+                reply_to_other=reply_to_other,
             )
+            if decision.level == InvocationLevel.DIRECT_INVOCATION:
+                query_ai = strip_invocation(text) if detect_invocation(text) else text.strip()
+                normalized_query = query_ai.lower().replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+                response_text = None
+                if "من انت" in normalized_query:
+                    response_text = "أنا لارا، مساعدتك الذكية والمطورة بواسطة المبدع litharm! 🌸"
+                elif "كيفك" in normalized_query or "كيف حالك" in normalized_query:
+                    response_text = random.choice([
+                        "بأفضل حال والحمد لله! كيف أساعدك اليوم؟ ✨",
+                        "منيحة الحمدلله 😄 وإنت كيفك؟",
+                        "تمام، مبسوطة إني عم بحكي معك 🌷",
+                    ])
+                elif "من طورك" in normalized_query:
+                    response_text = "تم برمجتي بواسطة المطور الأسطوري litharm 🚀"
+
+                if response_text is None and normalized_query in ("نكتة", "نكت"):
+                    response_text = f"😂 {random.choice(JOKES)}"
+
+                context_query = conversation_context.contextual_query(
+                    chat_id=chat_id, user_id=uid, text=query_ai,
+                    continued=decision.continued,
+                )
+                intent = classify_intent(query_ai, continued=decision.continued)
+                if response_text is None:
+                    # ArSyra's existing exact replies and dialogue corpus stay first in the chain.
+                    from arsyra.engine import ask as arsyra_ask
+                    arsyra_reply = arsyra_ask(context_query)
+                    if arsyra_reply:
+                        response_text = f"🤖 **لارا:** {arsyra_reply}"
+                if response_text is None:
+                    old_user_text = conversation_context.previous_user_text(chat_id, uid)
+                    response_text = natural_fallback(
+                        query_ai, intent,
+                        topic=old_user_text if decision.continued else "",
+                    )
+                    response_text = f"🤖 **لارا:** {response_text}"
+
+                sent = await update.message.reply_text(response_text, parse_mode=None)
+                conversation_context.record_reply(
+                    chat_id=chat_id,
+                    user_id=uid,
+                    user_text=text,
+                    bot_message_id=getattr(sent, "message_id", None),
+                    bot_text=response_text,
+                    continued=decision.continued,
+                )
+                return sent
 
     # 9. نظام الإدارة المحمي الشامل للمجموعات (خاص بالمشرفين فقط)
     if is_group:
@@ -1824,7 +1870,21 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ====================================================
 def main():
     asyncio.run(init_db())
-    app = Application.builder().token(BOT_TOKEN).build()
+    application_builder = (Application.builder().token(BOT_TOKEN)
+                           .post_init(video_editor_post_init)
+                           .post_shutdown(video_editor_post_shutdown))
+    telegram_api_base = os.getenv("TELEGRAM_API_BASE_URL")
+    telegram_file_base = os.getenv("TELEGRAM_FILE_BASE_URL")
+    if telegram_api_base:
+        application_builder = application_builder.base_url(telegram_api_base)
+    if telegram_file_base:
+        application_builder = application_builder.base_file_url(telegram_file_base)
+    app = application_builder.build()
+
+    # Start the optional Render keep-alive infrastructure only during runtime,
+    # never as a side effect of importing this module for tests or tooling.
+    threading.Thread(target=run_dummy_server, daemon=True).start()
+    threading.Thread(target=keep_alive_ping, daemon=True).start()
 
     reply_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_reply_init, pattern="^adm_add_reply$")],
@@ -1866,6 +1926,8 @@ def main():
     app.add_handler(CommandHandler("xo", cmd_xo))
 
     app.add_handler(reply_conv)
+    app.add_handler(MessageHandler(EDITOR_MEDIA_FILTER, handle_editor_media), group=-1)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_editor_text), group=-1)
         # معالج محادثة تعديل الفيديو الآمن
     video_edit_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(video_edit_init, pattern="^btn_video_edit$")],
@@ -1884,6 +1946,7 @@ def main():
     # app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_video_prompt))
     # تم إزالة المعالج العشوائي لتجنب التعارض:
     # app.add_handler(MessageHandler(AILimitFilter() & ~filters.COMMAND, handle_ai_video_prompt))
+    app.add_handler(CallbackQueryHandler(video_editor_callback, pattern=r"^video_editor:"))
     app.add_handler(CallbackQueryHandler(button_router))
     app.add_handler(CallbackQueryHandler(cmd_referral, pattern='^cmd_referral$'))
     

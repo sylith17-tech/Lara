@@ -1,6 +1,6 @@
 # --- ملف ميزات الـ VIP والحماية المتقدمة ---
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes
+from telegram.ext import ContextTypes, ConversationHandler
 from services.storage import create_job_storage
 
 async def handle_vip_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -10,6 +10,7 @@ async def handle_vip_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard = [
         [InlineKeyboardButton("🎬 بدء تعديل فيديو جديد (AI)", callback_data="start_video_edit")],
+        [InlineKeyboardButton("🧠 محرر فيديو متعدد الوسائط", callback_data="video_editor:open")],
         [InlineKeyboardButton("📊 إحصائيات الموارد والنظام", callback_data="vip_stats")],
         [InlineKeyboardButton("🔙 العودة للقائمة الرئيسية", callback_data="main_menu")]
     ]
