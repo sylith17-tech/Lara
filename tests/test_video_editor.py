@@ -11,6 +11,8 @@ from services.media_sessions import MediaSessionManager, SessionState
 from services.video_engine import MediaEngine
 from services.video_jobs import JobState, VideoJobManager
 from handlers.video_editor import _new_session
+from handlers.video_editor import (_control_keyboard, _category_keyboard, _template_keyboard,
+                                   _template_picker, _text_options_keyboard, TOOL_REQUESTS)
 from main_vip import handle_start_video_edit
 
 
@@ -67,6 +69,38 @@ def test_parser_speed_second_video_audio_and_image_duration():
     assert slow.operations == [{"type": "change_speed", "factor": 0.5}]
     image = parse_edit_request("حط الصورة أول 5 ثواني بالنص", media)
     assert image.ready and image.operations[0]["duration"] == 5
+
+
+def test_local_parser_handles_arabic_editor_tool_examples():
+    cases = {
+        "سرّعو للضعف": "change_speed",
+        "شيل الصوت": "remove_audio",
+        "زود الإضاءة": "brightness",
+        "خلي الألوان أقوى": "saturation",
+        "حول الفيديو إلى 9:16": "resize",
+        'حط كتابة "أهلا وسهلا" على الفيديو': "text_overlay",
+        "خلي الفيديو أبيض وأسود": "grayscale",
+        "اعمل fade بالبداية": "fade",
+        "دوّر الفيديو 90 درجة": "rotate",
+    }
+    for request, operation in cases.items():
+        plan = parse_edit_request(request, [_media("video")])
+        assert plan.ready, (request, plan.clarification)
+        assert operation in [item["type"] for item in plan.operations]
+
+
+def test_editor_panels_have_only_wired_local_tools():
+    assert sum(map(len, TOOL_REQUESTS.values())) >= 20
+    keyboards = [_control_keyboard("a" * 32), _template_keyboard("a" * 32),
+                 _template_picker("a" * 32, "cinematic_trailer"), _text_options_keyboard("a" * 32)]
+    for category in TOOL_REQUESTS:
+        markup = _category_keyboard(category, "a" * 32)
+        callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+        assert callbacks and all(callback.startswith("video_editor:") for callback in callbacks)
+        keyboards.append(markup)
+    all_callbacks = [button.callback_data for markup in keyboards for row in markup.inline_keyboard
+                     for button in row if button.callback_data]
+    assert all(len(callback.encode("utf-8")) <= 64 for callback in all_callbacks)
 
 
 def test_ai_plan_validator_rejects_unsafe_values_and_checks_media():
@@ -164,6 +198,10 @@ def test_ffmpeg_trim_and_remove_audio_on_tiny_fixture(tmp_path: Path):
         muted = await engine.apply(trimmed, tmp_path / "muted.mp4", {"type": "remove_audio"})
         muted_meta = await engine.probe_media(muted)
         assert all(stream["codec_type"] != "audio" for stream in muted_meta["streams"])
+        gray = await engine.apply(trimmed, tmp_path / "gray.mp4", {"type": "grayscale"})
+        assert any(stream["codec_type"] == "video" for stream in (await engine.probe_media(gray))["streams"])
+        reversed_video = await engine.apply(trimmed, tmp_path / "reversed.mp4", {"type": "reverse"})
+        assert any(stream["codec_type"] == "video" for stream in (await engine.probe_media(reversed_video))["streams"])
     asyncio.run(scenario())
 
 
@@ -202,6 +240,19 @@ def test_sessions_are_isolated_and_active_files_are_not_removed(tmp_path: Path):
         await manager.set_state(session.job_id, 10, SessionState.CANCELLED)
         assert await manager.remove(session.job_id, 10)
         assert not session.job_dir.exists()
+    asyncio.run(scenario())
+
+
+def test_session_cleanup_removes_stale_orphan_job_directories(tmp_path: Path):
+    async def scenario():
+        import os
+        import time
+        manager = MediaSessionManager(tmp_path, ttl_seconds=300)
+        orphan = tmp_path / ("b" * 32)
+        orphan.mkdir()
+        os.utime(orphan, (time.time() - 600, time.time() - 600))
+        assert await manager.cleanup_expired() == 1
+        assert not orphan.exists()
     asyncio.run(scenario())
 
 

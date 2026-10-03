@@ -11,6 +11,7 @@ async def handle_vip_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("🎬 بدء تعديل فيديو جديد (AI)", callback_data="start_video_edit")],
         [InlineKeyboardButton("🧠 محرر فيديو متعدد الوسائط", callback_data="video_editor:open")],
+        [InlineKeyboardButton("🎬 محرر الفيديو الاحترافي", callback_data="video_editor:open")],
         [InlineKeyboardButton("📊 إحصائيات الموارد والنظام", callback_data="vip_stats")],
         [InlineKeyboardButton("🔙 العودة للقائمة الرئيسية", callback_data="main_menu")]
     ]

@@ -61,7 +61,17 @@ def parse_edit_request(text: str, media: list[Any] | None = None) -> EditPlan:
     minute_range = re.search(r"(?:من\s*)?الدقيقه\s*(\d+)\s*(?:الى|للدقيقه|ل|حتى)\s*(?:الدقيقه\s*)?(\d+)", t)
     first_match = re.search(r"(?:اول|أول)\s*(\d+)\s*(ث|دقيق|دقايق|دقائق|minute|min|second|sec)?", t)
     first_minute = re.search(r"(?:اول|أول)\s*(?:دقيقه|دقيقه واحده|دقيقة)", t)
-    if re.search(trim_words, t):
+    remove_head = re.search(r"(?:احذف|شيل|ازل|امسح).{0,12}(?:اول|البدايه)\s*(\d+)\s*(ث|دقيق|دقايق|دقائق)?", t)
+    remove_tail = re.search(r"(?:احذف|شيل|ازل|امسح).{0,12}(?:اخر|النهايه)\s*(\d+)\s*(ث|دقيق|دقايق|دقائق)?", t)
+    if remove_head or remove_tail:
+        if video_count:
+            amount = float((remove_head or remove_tail).group(1))
+            unit = (remove_head or remove_tail).group(2) or "ث"
+            seconds = amount * 60 if unit.startswith("د") else amount
+            plan.operations.append({"type": "trim_head" if remove_head else "trim_tail", "duration": seconds})
+        else:
+            plan.clarification = "هذا القص يحتاج فيديو. أرسله أولًا."
+    elif re.search(trim_words, t):
         trim_type = "trim_audio" if audio_count and not video_count else "trim"
         if minute_range:
             start, end = float(minute_range.group(1)) * 60, float(minute_range.group(2)) * 60
@@ -101,7 +111,7 @@ def parse_edit_request(text: str, media: list[Any] | None = None) -> EditPlan:
         plan.operations.append({"type": "extract_audio"})
     if re.search(r"(?:خفف|وطي|قلل).{0,15}(?:صوت الفيديو|الصوت)", t) and "remove_audio" not in [o["type"] for o in plan.operations]:
         plan.operations.append({"type": "volume", "volume": 0.5})
-    if re.search(r"(?:fade|تلاشي|خفف الصوت تدريجي|دخول الصوت تدريجي|خروج الصوت تدريجي)", t):
+    if re.search(r"(?:fade|تلاشي|خفف الصوت تدريجي|دخول الصوت تدريجي|خروج الصوت تدريجي)", t) and re.search(r"(?:الصوت|صوت|audio)", t):
         direction = "out" if re.search(r"(?:fade out|خروج|نهايه|نهاية)", t) else "in"
         duration_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:ث|ثانيه|ثانية)", t)
         plan.operations.append({"type": "audio_fade", "direction": direction,
@@ -114,7 +124,7 @@ def parse_edit_request(text: str, media: list[Any] | None = None) -> EditPlan:
         plan.clarification = plan.clarification or "كم ثانية تريد تقديم الصوت أو تأخيره؟"
 
     video_audio_source = re.search(r"(?:صوت|الصوت).{0,24}(?:الفيديو\s*)?(?:الثاني|التاني|2|من فيديو اخر)|(?:الفيديو\s*)?(?:الثاني|التاني|2).{0,16}(?:صوت|الصوت)", t)
-    audio_request = re.search(r"(?:بدل|استبدل|حط|ضيف|أضف|اضف|ركب|ادمج|اخلط|امزج).{0,35}(?:الصوت|صوتين|صوتين|صوت|اغنيه|أغنية|اغنية|موسيقى|audio|song|music)", t)
+    audio_request = re.search(r"(?:بدل|استبدل|حط|ضيف|اضف|اضافه|ركب|ادمج|اخلط|امزج).{0,35}(?:الصوت|صوتين|صوت|اغنيه|موسيقى|audio|song|music)", t)
     if audio_request:
         mix = bool(re.search(r"(?:بالخلفيه|بالخلفية|كخلفيه|كخلفية|ادمج|اخلط|امزج|mix)", t))
         if video_audio_source and video_count >= 2:
@@ -131,21 +141,24 @@ def parse_edit_request(text: str, media: list[Any] | None = None) -> EditPlan:
         else:
             plan.operations.append({"type": "replace_audio", "media_index": 1})
 
-    speed = re.search(r"(?:سرع|سرّع|بسرعه|بسرعة).{0,15}(?:للضعف|مرتين|2x|2\s*مره|2\s*مرة)", t)
+    speed = re.search(r"(?:سرع|سرّع|بسرعه|بسرعة|ضاعف).{0,18}(?:للضعف|مرتين|2x|2\s*مره|2\s*مرة|السرعه)?", t)
     speed_num = re.search(r"(?:سرع|سرّع|خليه|خليها|اجعله).{0,20}(\d+(?:\.\d+)?)\s*x", t)
     slow = re.search(r"(?:ابط[أا]ه|خليه أبطأ|خليه ابطا|ابطا|أبطأ|ابطأ|بطيء|slow)", t)
     if speed or speed_num or slow:
-        factor = 2.0 if speed else (float(speed_num.group(1)) if speed_num else 0.5)
+        factor = float(speed_num.group(1)) if speed_num else (2.0 if speed else 0.5)
         if not 0.25 <= factor <= 4:
             plan.clarification = "السرعة المدعومة بين 0.25x و4x. ما السرعة التي تريدها؟"
         else:
             plan.operations.append({"type": "change_speed", "factor": factor})
 
-    if re.search(r"(?:عمودي|طولي|للموبايل|9\s*[:x/]\s*16|portrait)", t):
+    vertical_flip = re.search(r"(?:اقلب|اعكس).{0,12}(?:عمودي|راسي|فوق|تحت)", t)
+    if re.search(r"(?:عمودي|طولي|للموبايل|للريلز|للريل|للستوري|9\s*[:x/]\s*16|portrait|reels?)", t) and not vertical_flip:
         plan.operations.append({"type": "resize", "width": 1080, "height": 1920, "mode": "contain"})
-    elif re.search(r"1080\s*p", t):
+    elif re.search(r"(?:16\s*[:x/]\s*9|youtube|لليوتيوب)", t):
         plan.operations.append({"type": "resize", "width": 1920, "height": 1080, "mode": "contain"})
-    if re.search(r"(?:صغر|صغّر|خفف|قلل).{0,15}(?:الحجم|حجمه|مساحه|مساحة|size|file)", t):
+    elif re.search(r"(?:1\s*[:x/]\s*1|مربع|square)", t):
+        plan.operations.append({"type": "resize", "width": 1080, "height": 1080, "mode": "contain"})
+    if re.search(r"(?:صغر|خفف|قلل).{0,15}(?:الحجم|حجمه|حجم|مساحه|size|file)", t):
         plan.operations.append({"type": "compress", "crf": 28})
     rotation = re.search(r"(?:دور|دوّر|لف|لفه|rotate).{0,12}(90|180|270)", t)
     if rotation:
@@ -163,7 +176,7 @@ def parse_edit_request(text: str, media: list[Any] | None = None) -> EditPlan:
     if any(op["type"] == "concat_videos" for op in plan.operations):
         plan.operations.sort(key=lambda op: 0 if op["type"] == "concat_videos" else 1)
 
-    if re.search(r"(?:حط|ضع|ضيف|أضف|اضف|overlay).{0,25}(?:الصوره|الصورة|صوره|صورة|image)", t):
+    if re.search(r"(?:حط|ضع|ضيف|اضف|اضافه|overlay).{0,25}(?:الصوره|صوره|image)", t):
         if image_count == 0:
             plan.clarification = plan.clarification or "أرسل الصورة التي تريد إضافتها إلى الفيديو."
         else:
@@ -181,7 +194,7 @@ def parse_edit_request(text: str, media: list[Any] | None = None) -> EditPlan:
             plan.operations.append({"type": "text_overlay", "text": quoted.group(1)})
             plan.clarification = None
 
-    for intent, pattern in (("brightness", r"(?:سطوع|إضاءة|الاضاءه)"),
+    for intent, pattern in (("brightness", r"(?:سطوع|إضاءة|الاضاءه|اضاءه)"),
                             ("contrast", r"(?:تباين|كونتراست)"),
                             ("saturation", r"(?:تشبع|ألوان أكثر)"),
                             ("blur", r"(?:ضباب|تمويه|غبش)"),
@@ -190,6 +203,43 @@ def parse_edit_request(text: str, media: list[Any] | None = None) -> EditPlan:
         if match:
             value = max(-1.0, min(1.0, float(match.group(1))))
             plan.operations.append({"type": intent, "value": value})
+    if re.search(r"(?:زود|ارفع|قوي).{0,12}(?:التباين|كونتراست)", t) and not any(o["type"] == "contrast" for o in plan.operations):
+        plan.operations.append({"type": "contrast", "value": 0.2})
+    if re.search(r"(?:زود|ارفع|قوي).{0,12}(?:الاضاءه|اضاءه|السطوع)", t) and not any(o["type"] == "brightness" for o in plan.operations):
+        plan.operations.append({"type": "brightness", "value": 0.18})
+    if re.search(r"(?:زود|قوي|خلي).{0,12}(?:الالوان|الوان|التشبع)", t) and not any(o["type"] == "saturation" for o in plan.operations):
+        plan.operations.append({"type": "saturation", "value": 0.35})
+    if re.search(r"(?:تمويه|ضباب).{0,12}(?:خفيف|بسيط)?", t) and not any(o["type"] == "blur" for o in plan.operations):
+        plan.operations.append({"type": "blur", "value": 0.35})
+    if re.search(r"(?:زود|حسن).{0,12}(?:الحده|حده|الوضوح)", t):
+        plan.operations.append({"type": "sharpen", "value": 0.5})
+    if re.search(r"(?:ابيض واسود|ابيض و اسود|اسود وابيض|grayscale|black and white)", t):
+        plan.operations.append({"type": "grayscale"})
+    if not re.search(r"(?:الصوت|صوت|audio)", t) and re.search(r"(?:اعمل|حط|ضيف|اضف).{0,10}(?:fade|تلاشي).{0,12}(?:البدايه|البداية|in)", t):
+        plan.operations.append({"type": "fade", "direction": "in", "duration": 1.0})
+    elif not re.search(r"(?:الصوت|صوت|audio)", t) and re.search(r"(?:اعمل|حط|ضيف|اضف).{0,10}(?:fade|تلاشي).{0,12}(?:النهايه|النهاية|out)", t):
+        plan.operations.append({"type": "fade", "direction": "out", "duration": 1.0})
+    if re.search(r"اعكس.{0,12}(?:الفيديو|المقطع)", t) and not re.search(r"(?:افقي|عمودي|رأسي)", t):
+        plan.operations.append({"type": "reverse"})
+    volume_percent = re.search(r"(?:ارفع|زود|علي|عليلي).{0,15}(?:الصوت|صوت).{0,8}(\d{2,3})\s*%", t)
+    volume_percent = volume_percent or re.search(r"(?:الصوت|صوت).{0,8}(\d{2,3})\s*%", t)
+    if volume_percent:
+        plan.operations.append({"type": "volume", "volume": min(2.0, int(volume_percent.group(1)) / 100)})
+    if re.search(r"(?:وازن|طبع|normalize).{0,12}(?:الصوت|صوت)?", t):
+        plan.operations.append({"type": "normalize_audio"})
+    hue = re.search(r"(?:hue|درجة اللون|لون الفيديو).{0,12}([+-]?\d{1,3})", t)
+    if hue:
+        plan.operations.append({"type": "hue", "value": max(-180, min(180, int(hue.group(1))))})
+    if re.search(r"(?:نيجاتيف|negative|اعكس الالوان)", t):
+        plan.operations.append({"type": "negative"})
+    if re.search(r"(?:تظليل سينمائي|vignette|تغميق الاطراف)", t):
+        plan.operations.append({"type": "vignette"})
+    if re.search(r"(?:حبيبات فيلم|تحبيب|film grain)", t):
+        plan.operations.append({"type": "film_grain"})
+    if re.search(r"(?:دف[اي]|دفي|حراره الوان|حراره الالوان|الوان ادفى|warm)", t):
+        plan.operations.append({"type": "temperature", "value": 0.45})
+    elif re.search(r"(?:برد الوان|برد الالوان|الوان ابرد|cool)", t):
+        plan.operations.append({"type": "temperature", "value": -0.45})
 
     if re.search(r"(?:ترجم|طلعلي الترجمه|طلع لي الترجمه|استخرج الترجمه|transcribe)", t):
         plan.unsupported.append("إنشاء/ترجمة الترجمة يحتاج مزود Speech-to-Text/ترجمة غير مهيأ حاليًا؛ لم تُنشأ نتيجة وهمية.")
@@ -203,7 +253,7 @@ def parse_edit_request(text: str, media: list[Any] | None = None) -> EditPlan:
     if re.search(r"(?:نظف|نظّف|ازيل|أزل|شيل|إزالة).{0,20}(?:الضجيج|الضوضاء|noise)", t):
         plan.unsupported.append("إزالة الضجيج تحتاج backend صوتيًا غير مهيأ حاليًا.")
 
-    requires_video = {"trim", "remove_audio", "extract_audio", "replace_audio", "resize", "compress",
+    requires_video = {"trim", "trim_head", "trim_tail", "remove_audio", "extract_audio", "replace_audio", "resize", "compress", "grayscale", "reverse",
                       "rotate", "flip", "concat_videos", "overlay_image", "text_overlay", "burn_subtitles",
                       "crop", "fade", "brightness", "contrast", "saturation", "blur", "sharpen"}
     if not video_count and any(op["type"] in requires_video for op in plan.operations):

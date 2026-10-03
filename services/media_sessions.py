@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shutil
 import time
 import uuid
@@ -15,11 +16,16 @@ from typing import Any
 class SessionState(str, Enum):
     RECEIVING_MEDIA = "RECEIVING_MEDIA"
     WAITING_FOR_INSTRUCTIONS = "WAITING_FOR_INSTRUCTIONS"
+    WAITING_TEXT = "WAITING_TEXT"
+    WAITING_AUDIO = "WAITING_AUDIO"
+    WAITING_AUDIO_VIDEO = "WAITING_AUDIO_VIDEO"
+    WAITING_MERGE_VIDEO = "WAITING_MERGE_VIDEO"
     WAITING_FOR_CONFIRMATION = "WAITING_FOR_CONFIRMATION"
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
+    READY = "READY"
 
 
 @dataclass
@@ -49,6 +55,13 @@ class MediaSession:
     clarification: str | None = None
     result_path: str | None = None
     task: asyncio.Task | None = None
+    history: list[str] = field(default_factory=list)
+    history_cursor: int = 0
+    lara_intro: bool = False
+    operation_count: int = 0
+    preview_count: int = 0
+    selected_template: str | None = None
+    export_profile: str = "balanced"
 
 
 class MediaSessionManager:
@@ -101,7 +114,9 @@ class MediaSessionManager:
             session = self._sessions.get(job_id)
             if not session or session.user_id != int(user_id) or session.chat_id != int(chat_id):
                 return None
-            if session.state not in (SessionState.RECEIVING_MEDIA, SessionState.WAITING_FOR_INSTRUCTIONS):
+            if session.state not in (SessionState.RECEIVING_MEDIA, SessionState.WAITING_FOR_INSTRUCTIONS,
+                                     SessionState.WAITING_TEXT, SessionState.WAITING_AUDIO,
+                                     SessionState.WAITING_AUDIO_VIDEO, SessionState.WAITING_MERGE_VIDEO):
                 return None
             if len(session.media) >= 8:
                 return None
@@ -156,6 +171,7 @@ class MediaSessionManager:
 
     async def cleanup_expired(self) -> int:
         now = time.time()
+        removed_dirs: set[Path] = set()
         async with self._lock:
             expired = [s for s in self._sessions.values()
                        if now - s.updated_at > self.ttl_seconds
@@ -165,7 +181,19 @@ class MediaSessionManager:
                 self._sessions.pop(session.job_id, None)
         for session in expired:
             self._safe_remove_dir(session.job_dir)
-        return len(expired)
+            removed_dirs.add(session.job_dir.resolve())
+        if self.root.is_dir():
+            active_dirs = {session.job_dir.resolve() for session in self._sessions.values()}
+            for child in self.root.iterdir():
+                if (child.is_dir() and re.fullmatch(r"[a-f0-9]{32}", child.name)
+                        and child.resolve() not in active_dirs and child.resolve() not in removed_dirs):
+                    try:
+                        if now - child.stat().st_mtime > self.ttl_seconds:
+                            self._safe_remove_dir(child)
+                            removed_dirs.add(child.resolve())
+                    except FileNotFoundError:
+                        continue
+        return len(removed_dirs)
 
 
 media_sessions = MediaSessionManager()

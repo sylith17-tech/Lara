@@ -100,7 +100,11 @@ async def handle_get_ref_link(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
 
 
-import threading, http.server, socketserver, os, logging, asyncio, glob, time, random, urllib.request
+import threading, http.server, socketserver, os, logging, asyncio, time, random, urllib.request
+import difflib
+import shutil
+import tempfile
+import unicodedata
 from datetime import datetime
 import platform
 import psutil
@@ -202,28 +206,242 @@ TRIVIA_QUESTIONS = [
 # ====================================================
 # --- محرك تحميل الأغاني الذكي (yt-dlp) ---
 # ====================================================
-def _download_yt_audio(query: str) -> dict:
+YOUTUBE_MAX_RESULTS = 5
+YOUTUBE_MAX_SEARCH_QUERIES = 3
+YOUTUBE_MAX_DOWNLOAD_CANDIDATES = 2
+YOUTUBE_MAX_FILE_BYTES = 49_000_000
+YOUTUBE_MAX_SOURCE_BYTES = 100_000_000
+YOUTUBE_FAILURE_MESSAGE = "❌ ما قدرت أنزّل النتيجة من YouTube حاليًا. جرّب اسم الأغنية مع اسم الفنان."
+_YOUTUBE_DOWNLOAD_SLOTS = threading.BoundedSemaphore(2)
+_ARABIC_COMMANDS = ("نزلي", "حملي", "بدي غنية", "أغنية", "اغنية", "تحميل")
+_VIDEO_SUFFIX = re.compile(r"\s+(?:فيديو\s+كليب|كليب\s+فيديو|فيديو|video\s+clip|video|mp4)\s*$", re.I)
+_AUDIO_SUFFIX = re.compile(r"\s+(?:صوتي|صوت|أغنية|اغنية|أغنيه|audio|mp3)\s*$", re.I)
+
+
+def _parse_youtube_download_request(text: str) -> tuple[str, str] | None:
+    """Return (search query, mode) for the existing music command family."""
+    command = next((item for item in _ARABIC_COMMANDS
+                    if text.startswith(item) and (len(text) == len(item) or text[len(item)].isspace())), None)
+    if not command:
+        return None
+    query = text[len(command):].strip()
+    mode = "audio"
+    video_match = _VIDEO_SUFFIX.search(query)
+    audio_match = _AUDIO_SUFFIX.search(query)
+    if video_match:
+        query = query[:video_match.start()].strip()
+        mode = "video"
+    elif audio_match and query[:audio_match.start()].strip():
+        query = query[:audio_match.start()].strip()
+    return query, mode
+
+
+def _normalize_youtube_text(value: str) -> str:
+    value = unicodedata.normalize("NFKD", str(value).casefold())
+    value = "".join(char for char in value if not unicodedata.combining(char))
+    value = value.replace("ـ", "")
+    value = value.translate(str.maketrans({"أ": "ا", "إ": "ا", "آ": "ا", "ٱ": "ا", "ى": "ي", "ة": "ه"}))
+    return re.sub(r"[^\w]+", " ", value, flags=re.UNICODE).strip()
+
+
+def _youtube_query_forms(query: str) -> list[str]:
+    normalized = _normalize_youtube_text(query)
+    artist_forms = ("اسماعيل تمر", "سماعيل تمر", "ismail tamer", "ismael tamer")
+    if normalized in {_normalize_youtube_text(form) for form in artist_forms}:
+        if " tamer" in normalized:
+            forms = [query, "إسماعيل تمر", "سماعيل تمر"]
+        else:
+            forms = [query, "اسماعيل تمر", "Ismail Tamer"]
+        unique_forms = []
+        seen = set()
+        for form in forms:
+            key = _normalize_youtube_text(form)
+            if key not in seen:
+                unique_forms.append(form)
+                seen.add(key)
+        return unique_forms[:YOUTUBE_MAX_SEARCH_QUERIES]
+    return [query]
+
+
+def _youtube_result_score(query: str, entry: dict, mode: str = "audio") -> float:
+    title = _normalize_youtube_text(entry.get("title", ""))
+    uploader = _normalize_youtube_text(entry.get("channel") or entry.get("uploader") or "")
+    normalized_query = _normalize_youtube_text(query)
+    if not title or not normalized_query:
+        return -1.0
+    title_tokens = set(title.split())
+    uploader_tokens = set(uploader.split())
+    query_forms = _youtube_query_forms(query)
+    score = -1.0
+    for query_form in query_forms:
+        normalized_form = _normalize_youtube_text(query_form)
+        query_tokens = set(normalized_form.split())
+        title_coverage = len(query_tokens & title_tokens) / max(1, len(query_tokens))
+        artist_coverage = len(query_tokens & uploader_tokens) / max(1, len(query_tokens))
+        similarity = difflib.SequenceMatcher(None, normalized_form, title).ratio()
+        form_score = 0.58 * title_coverage + 0.16 * artist_coverage + 0.26 * similarity
+        if normalized_form in title:
+            form_score += 0.35
+        score = max(score, form_score)
+    if re.search(r"\b(?:official|music|audio|video|lyrics|lyric|اغنيه|اغنيه|كليب)\b", title):
+        score += 0.10
+    if mode == "audio" and re.search(r"\b(?:audio|official audio|lyrics|lyric|music)\b", title):
+        score += 0.12
+    if mode == "video" and re.search(r"\b(?:official video|music video|video|clip|كليب)\b", title):
+        score += 0.12
+    if re.search(r"\b(?:reaction|gameplay|gaming|compilation|full album|mashup|shorts?|spam)\b", title):
+        score -= 0.65
+    duration = entry.get("duration")
+    if isinstance(duration, (int, float)):
+        if duration < 25:
+            score -= 0.55
+        elif duration > 1800:
+            score -= 0.45
+        elif duration > 900:
+            score -= 0.2
+    return score
+
+
+def _rank_youtube_results(query: str, entries: list[dict], mode: str = "audio") -> list[dict]:
+    unique = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or not entry.get("id"):
+            continue
+        unique.setdefault(entry["id"], entry)
+    return sorted(unique.values(), key=lambda entry: _youtube_result_score(query, entry, mode), reverse=True)
+
+
+def _youtube_base_options() -> dict:
+    return {
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "cachedir": False,
+        "socket_timeout": 15,
+        "retries": 1,
+        "extractor_retries": 1,
+        "fragment_retries": 2,
+        "file_access_retries": 1,
+        "concurrent_fragment_downloads": 1,
+        "max_filesize": YOUTUBE_MAX_SOURCE_BYTES,
+    }
+
+
+def _youtube_auth_challenge(error: BaseException) -> bool:
+    message = str(error).casefold()
+    return any(part in message for part in ("sign in to confirm", "not a bot", "confirm you're not", "confirm you’re not"))
+
+
+def _youtube_retryable_error(error: BaseException) -> bool:
+    message = str(error).casefold()
+    return ("output_exceeds_telegram_limit" in message
+            or _youtube_auth_challenge(error)
+            or isinstance(error, (TimeoutError, ConnectionError))
+            or any(part in message for part in ("timed out", "temporarily unavailable", "http error 5",
+                                                  "connection reset", "connection refused", "network is unreachable")))
+
+
+def _download_yt_audio(query: str, mode: str = "audio", on_progress=None) -> dict:
+    """Search, rank, and download at most two results with one safe client fallback."""
+    if mode not in ("audio", "video") or not query.strip():
+        return {"success": False, "error": "invalid_request"}
+    if not _YOUTUBE_DOWNLOAD_SLOTS.acquire(timeout=1):
+        return {"success": False, "error": "download_capacity_reached"}
+    temp_dir = tempfile.mkdtemp(prefix="lara_youtube_")
     try:
         import yt_dlp
-        out_pattern = f"/tmp/lara_{int(time.time() * 1000)}"
-        ydl_opts = {
-        "extractor_args": {"youtube": {"player_client": ["android", "ios", "web"]}},
-            'format': 'bestaudio/best',
-            'outtmpl': out_pattern + '.%(ext)s',
-            'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'}],
-            'noplaylist': True, 'quiet': True, 'default_search': 'ytsearch1',
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(query, download=True)
-            if 'entries' in info and len(info['entries']) > 0:
-                info = info['entries'][0]
-            filepath = out_pattern + ".mp3"
-            if not os.path.exists(filepath):
-                files = glob.glob(out_pattern + ".*")
-                if files: filepath = files[0]
-            return {'success': True, 'filepath': filepath, 'title': info.get('title', query), 'uploader': info.get('uploader', 'غير معروف')}
-    except Exception as e:
-        return {'success': False, 'error': str(e)}
+
+        if on_progress:
+            on_progress("⏳ عم دور على الأغنية المناسبة..." if mode == "audio" else "⏳ عم دور على الفيديو المناسب...")
+        candidates = []
+        search_options = _youtube_base_options()
+        search_options.update({"extract_flat": "in_playlist", "skip_download": True})
+        for search_query in _youtube_query_forms(query):
+            with yt_dlp.YoutubeDL(search_options) as ydl:
+                result = ydl.extract_info(f"ytsearch{YOUTUBE_MAX_RESULTS}:{search_query}", download=False)
+            candidates.extend((result or {}).get("entries") or [])
+            # Avoid fan-out when the initial query already has clearly relevant candidates.
+            valid_candidates = [item for item in candidates if isinstance(item, dict)]
+            if valid_candidates and max(_youtube_result_score(query, item, mode) for item in valid_candidates) >= 0.75:
+                break
+        ranked = _rank_youtube_results(query, candidates, mode)[:YOUTUBE_MAX_DOWNLOAD_CANDIDATES]
+        if not ranked:
+            raise RuntimeError("no_search_results")
+
+        last_error = RuntimeError("download_failed")
+        if on_progress:
+            on_progress("⬇️ عم حمّلها..." if mode == "audio" else "⬇️ عم حمّل الفيديو...")
+        for index, candidate in enumerate(ranked):
+            video_url = candidate.get("webpage_url") or f"https://www.youtube.com/watch?v={candidate['id']}"
+            for attempt in range(2):
+                options = _youtube_base_options()
+                options.update({"outtmpl": os.path.join(temp_dir, f"candidate_{index}_%(id)s.%(ext)s")})
+                if attempt:
+                    # Retry with yt-dlp's supported default client only; never inject credentials.
+                    options["extractor_args"] = {"youtube": {"player_client": ["default"]}}
+                if mode == "audio":
+                    options.update({
+                        "format": "bestaudio/best",
+                        "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}],
+                    })
+                else:
+                    options.update({
+                        "format": ("best[height<=480][ext=mp4][filesize<49M]/best[height<=480][filesize<49M]/best[height<=480]/best[ext=mp4]/best"
+                                   if attempt else "best[ext=mp4][filesize<49M]/best[filesize<49M]/best[ext=mp4]/best"),
+                        "merge_output_format": "mp4",
+                    })
+                try:
+                    with yt_dlp.YoutubeDL(options) as ydl:
+                        info = ydl.extract_info(video_url, download=True)
+                    prefix = f"candidate_{index}_"
+                    files = [path for path in (os.path.join(temp_dir, name) for name in os.listdir(temp_dir))
+                             if os.path.isfile(path) and os.path.basename(path).startswith(prefix)]
+                    preferred = ".mp3" if mode == "audio" else ".mp4"
+                    filepath = next((path for path in files if path.lower().endswith(preferred)), None)
+                    filepath = filepath or next((path for path in files if not path.endswith((".part", ".ytdl"))), None)
+                    if not filepath or os.path.getsize(filepath) <= 0:
+                        raise RuntimeError("download_output_missing")
+                    if os.path.getsize(filepath) > YOUTUBE_MAX_FILE_BYTES:
+                        raise RuntimeError("output_exceeds_telegram_limit")
+                    metadata = info if isinstance(info, dict) else candidate
+                    return {"success": True, "filepath": filepath, "temp_dir": temp_dir,
+                            "title": metadata.get("title") or candidate.get("title") or query,
+                            "uploader": metadata.get("uploader") or candidate.get("uploader") or candidate.get("channel") or "غير معروف",
+                            "mode": mode}
+                except Exception as exc:
+                    last_error = exc
+                    for name in os.listdir(temp_dir):
+                        if name.startswith(f"candidate_{index}_"):
+                            try:
+                                os.remove(os.path.join(temp_dir, name))
+                            except OSError:
+                                pass
+                    # Retry once only for an authentication challenge or a transient extraction/network failure.
+                    if attempt or not _youtube_retryable_error(exc):
+                        break
+        raise last_error
+    except Exception as exc:
+        logger.warning("YouTube download failed (%s): %s", type(exc).__name__, str(exc)[:500])
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return {"success": False, "error": "youtube_download_failed"}
+    finally:
+        _YOUTUBE_DOWNLOAD_SLOTS.release()
+
+
+def _cleanup_youtube_download(result: dict) -> None:
+    temp_dir = result.get("temp_dir")
+    if temp_dir:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+async def _send_youtube_result(bot, chat_id: int, reply_to_message_id: int, result: dict) -> None:
+    with open(result["filepath"], "rb") as output_file:
+        if result.get("mode", "audio") == "video":
+            await bot.send_video(chat_id=chat_id, video=output_file, caption=result["title"],
+                                 reply_to_message_id=reply_to_message_id)
+        else:
+            await bot.send_audio(chat_id=chat_id, audio=output_file, title=result["title"],
+                                 performer=result["uploader"], reply_to_message_id=reply_to_message_id)
 
 # ====================================================
 # --- نظام مراقبة السيرفر وفلتر الشتائم ---
@@ -1890,31 +2108,34 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await update.message.reply_text(f"🗣️ **لارا تقول:** {speech_text}")
 
     # 7. تنزيل الأغاني الموسيقية
-    music_triggers = ["نزلي", "حملي", "بدي غنية", "اغنية", "تحميل"]
-    if any(text.startswith(trig) for trig in music_triggers):
-        query_song = text
-        for trig in music_triggers:
-            query_song = query_song.replace(trig, "")
-        query_song = query_song.strip()
+    music_request = _parse_youtube_download_request(text)
+    if music_request is not None:
+        query_song, download_mode = music_request
 
         if not query_song:
             return await update.message.reply_text("❌ يرجى كتابة اسم الأغنية بعد الأمر، مثال:\n`نزلي أصالة`", parse_mode=None)
 
-        status_msg = await update.message.reply_text("🔎 **جاري البحث وتحميل الأغنية...**", parse_mode=None)
-        res = await asyncio.to_thread(_download_yt_audio, query_song)
+        status_msg = await update.message.reply_text("⏳ عم دور على الأغنية المناسبة..." if download_mode == "audio"
+                                                     else "⏳ عم دور على الفيديو المناسب...", parse_mode=None)
+        event_loop = asyncio.get_running_loop()
+        def report_youtube_progress(message: str) -> None:
+            def schedule_update() -> None:
+                asyncio.create_task(status_msg.edit_text(message, parse_mode=None))
+            event_loop.call_soon_threadsafe(schedule_update)
+        res = await asyncio.to_thread(_download_yt_audio, query_song, download_mode, report_youtube_progress)
 
         if res['success'] and os.path.exists(res['filepath']):
             try:
-                await status_msg.edit_text("⬆️ **جاري رفع الملف الصوتي...**", parse_mode=None)
-                with open(res['filepath'], 'rb') as audio_file:
-                    await context.bot.send_audio(chat_id=chat_id, audio=audio_file, title=res['title'], performer=res['uploader'], reply_to_message_id=update.message.message_id)
+                await status_msg.edit_text("🎵 تم تجهيز الملف، عم أرسله إلك..." if download_mode == "audio"
+                                           else "🎬 تم تجهيز الفيديو، عم أرسله إلك...", parse_mode=None)
+                await _send_youtube_result(context.bot, chat_id, update.message.message_id, res)
                 await status_msg.delete()
-            except Exception as e:
-                await status_msg.edit_text(f"⚠️ خطأ بالإرسال: {e}")
+            except Exception:
+                await status_msg.edit_text("❌ تعذر إرسال الملف إلى Telegram. جرّب نتيجة أقصر أو أصغر حجمًا.", parse_mode=None)
             finally:
-                if os.path.exists(res['filepath']): os.remove(res['filepath'])
+                _cleanup_youtube_download(res)
         else:
-            await status_msg.edit_text(f"❌ فشل تحميل الأغنية: {res.get('error', 'غير متوفرة')}")
+            await status_msg.edit_text(YOUTUBE_FAILURE_MESSAGE, parse_mode=None)
         return
 
     # 9. نظام الإدارة المحمي الشامل للمجموعات (خاص بالمشرفين فقط)
