@@ -1,3 +1,4 @@
+from pathlib import Path as _Path
 from sqlalchemy import Column, Integer, String, BigInteger, Boolean, text, Text
 import asyncio
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
@@ -9,6 +10,11 @@ engine = create_async_engine(DATABASE_URL, echo=False)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 class Base(DeclarativeBase): pass
+
+# Keep this legacy module usable as the parent of the existing database/ package.
+# `database.py` remains the active polling bot's DB facade; the path only enables
+# explicit imports such as `database.models` used by the separate app/ stack.
+__path__ = [str(_Path(__file__).with_name("database"))]
 
 class User(Base):
     referred_by = Column(Integer, nullable=True)

@@ -8,9 +8,11 @@ import pytest
 
 from arsyra.conversation import (
     ConversationIntent,
+    ConversationState,
     InvocationLevel,
     LaraConversationContext,
     classify_intent,
+    calculate_local_request,
     detect_invocation,
     is_telegram_command,
     is_existing_feature_command,
@@ -136,6 +138,70 @@ def test_followup_matching_is_conservative():
     assert looks_like_follow_up("وفي شي تاني؟")
     assert not looks_like_follow_up("شو الأخبار بالشباب؟")
     assert not looks_like_follow_up("وين الشباب؟")
+
+
+@pytest.mark.parametrize("text", ["Lara how are you?", "يا لارا شو الأخبار؟", "لارااا شو الأخبار؟"])
+def test_requested_invocation_forms_are_direct(text: str):
+    assert LaraConversationContext().decide(chat_id=-100, user_id=2, text=text).level == InvocationLevel.DIRECT_INVOCATION
+
+
+@pytest.mark.parametrize("text", ["اسم صديقتي لارا", "لارا قالتلي إنها جاية"])
+def test_reported_name_mentions_never_open_conversation(text: str):
+    decision = LaraConversationContext().decide(chat_id=-100, user_id=2, text=text)
+    assert decision.level != InvocationLevel.DIRECT_INVOCATION
+
+
+def test_followup_intents_topic_correction_and_conversation_state():
+    context = LaraConversationContext()
+    context.record_reply(chat_id=-100, user_id=2,
+                         user_text="لارا شو يعني VPN؟", bot_message_id=40,
+                         bot_text="VPN نفق يحمي اتصالك. بدك شرح طريقة الاستخدام؟",
+                         intent=ConversationIntent.EXPLANATION_REQUEST, now=20)
+    details = context.conversation_details(-100, 2)
+    assert details["state"] == ConversationState.WAITING_FOR_FOLLOWUP
+    assert details["previous_topic"] == "vpn"
+    assert len(details["history"]) == 2
+
+    assert context.decide(chat_id=-100, user_id=2,
+                          text="طيب كيف بستخدمه؟", now=21).continued
+    assert classify_intent("طيب كيف بستخدمه؟", continued=True) == ConversationIntent.FOLLOW_UP
+    assert context.decide(chat_id=-100, user_id=2,
+                          text="وضحلي أكتر", now=22).continued
+    assert classify_intent("لا قصدي شي تاني", continued=True) == ConversationIntent.CORRECTION
+    assert context.contextual_query(chat_id=-100, user_id=2,
+                                   text="لا قصدي شي تاني", continued=True) == "لا قصدي شي تاني"
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    ("احسب 12 + 3", 15), ("احسبي 4 * 5", 20), ("calculate 8 / 2", 4),
+])
+def test_local_bounded_calculation(text: str, expected: int):
+    assert calculate_local_request(text) == expected
+
+
+def test_local_calculation_rejects_executable_or_unbounded_input():
+    assert calculate_local_request("__import__('os').system('id')") is None
+    assert calculate_local_request("2 ** 100") is None
+
+
+def test_contextual_dispatch_is_after_admin_and_legacy_feature_blocks():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "main.py").read_text(encoding="utf-8")
+    admin = source.index("# 9. نظام الإدارة المحمي الشامل")
+    natural = source.index("# 10. طبقة المحادثة المحلية")
+    assert natural > admin
+    assert source.index("# 7. تنزيل الأغاني الموسيقية") < natural
+    assert "context.user_data.get(\"awaiting_phone\")" in source
+    assert "uid in ACTIVE_AI_USERS" in source
+
+
+@pytest.mark.parametrize("text", [
+    "يا لارا رفع ادمن @person", "لارا تنزيل ادمن @person",
+    "يا لارا رفع مميز @person", "لارا تنزيل مميز @person",
+])
+def test_role_and_vip_admin_phrases_are_protected(text: str):
+    context = LaraConversationContext()
+    assert context.decide(chat_id=-100, user_id=2, text=text).level == InvocationLevel.NO_INVOCATION
 
 
 def test_admin_moderation_vip_commands_and_legacy_handlers_are_unchanged():

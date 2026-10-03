@@ -1,4 +1,5 @@
 # Names used in annotations must exist before those declarations.
+import re
 from telegram import Update
 from telegram.ext import ContextTypes
 from main_vip import handle_vip_menu, video_edit_init, video_receive_file, video_process_and_reply, cancel_video_edit, WAIT_VIDEO, WAIT_PROMPT, handle_incoming_video
@@ -114,6 +115,16 @@ from telegram.ext import (
 )
 from sqlalchemy import select, func
 from database import GroupSettings, init_db, async_session, User, AutoReply, Suggestion, ModerationWarning
+from handlers.group_owner import (
+    FLOW_KEY as GROUP_OWNER_FLOW_KEY,
+    handle_owner_callback,
+    handle_owner_flow_message,
+    is_group_admin,
+    is_group_owner,
+    render_welcome,
+    show_owner_menu,
+)
+from services.group_features import ACTION_REGISTRY, group_feature_store
 
 # ====================================================
 # --- سيرفر وهمي للعمل على Render ---
@@ -145,7 +156,7 @@ def keep_alive_ping():
 # ====================================================
 # --- الإعدادات الأساسية والثوابت ---
 # ====================================================
-BOT_TOKEN = "8927003617:AAHcYjFSWmIW4ZSfIi-frY5cjxaPFnPss2g"
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 ADMIN_ID = 1880700518
 BOT_START_TIME = time.time()
 
@@ -600,7 +611,7 @@ async def check_bad_words(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 # ====================================================
 # --- أزرار القوائم الأساسية ---
 # ====================================================
-def get_main_keyboard(bot_username, is_admin):
+def get_main_keyboard(bot_username, is_admin, is_group_owner=False):
     keyboard = [
         [InlineKeyboardButton("💎 ميزات VIP الحصرية", callback_data="vip_menu")],
             [InlineKeyboardButton("➕ تفعيل البوت بمجموعة", url=f"https://t.me/{bot_username}?startgroup=true")],
@@ -612,6 +623,8 @@ def get_main_keyboard(bot_username, is_admin):
     ]
     if is_admin:
         keyboard.append([InlineKeyboardButton("⚙️ لوحة تحكم المطور (خاص)", callback_data="admin_main")])
+    if is_group_owner:
+        keyboard.append([InlineKeyboardButton("⚙️ إعدادات المجموعة", callback_data="owner_group:open")])
     return InlineKeyboardMarkup(keyboard)
 
 def get_xo_keyboard(board):
@@ -632,8 +645,23 @@ def get_xo_keyboard(board):
 async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.new_chat_members:
         return
+    chat = update.effective_chat
+    settings = await group_feature_store.settings_for(chat.id) if chat else None
+    if settings and not settings.welcome_enabled:
+        return
     for member in update.message.new_chat_members:
         if member.id == context.bot.id:
+            continue
+
+        custom_text = render_welcome(
+            settings.welcome_template if settings else None,
+            name=member.first_name or "عضو جديد",
+            username=member.username,
+            user_id=member.id,
+            chat_name=chat.title if chat else None,
+        )
+        if custom_text is not None:
+            await update.message.reply_text(custom_text, parse_mode=None)
             continue
         
         user_mention = f"[{member.first_name}](tg://user?id={member.id})"
@@ -949,9 +977,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # إرسال القائمة الرئيسية للمستخدم بنجاح
     bot_obj = await context.bot.get_me()
     main_text = "🌸 **روبوت لارا (V5.9 Legendary):**\n\n✨ اختر من القائمة أدناه:"
+    owner_here = await is_group_owner(update, context)
     await update.message.reply_text(
         main_text,
-        reply_markup=get_main_keyboard(bot_obj.username, user.id == ADMIN_ID),
+        reply_markup=get_main_keyboard(bot_obj.username, user.id == ADMIN_ID, owner_here),
         parse_mode="Markdown"
     )
 
@@ -1004,7 +1033,16 @@ async def cmd_calc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         return await update.message.reply_text("🔢 استخدم: `/calc 5+5`", parse_mode=None)
     try:
-        res = eval("".join(context.args))
+        from arsyra.conversation import calculate_local_request
+        expression = " ".join(context.args)
+        if not re.fullmatch(
+            r"\s*[-+]?\d+(?:\.\d+)?(?:\s*(?:\*\*|//|[+*/%\-])\s*[-+]?\d+(?:\.\d+)?)+\s*",
+            expression,
+        ):
+            raise ValueError("invalid arithmetic expression")
+        res = calculate_local_request(expression)
+        if res is None:
+            raise ValueError("invalid arithmetic expression")
         await update.message.reply_text(f"🔢 **النتيجة:** `{res}`", parse_mode=None)
     except Exception:
         await update.message.reply_text("⚠️ خطأ في المعادلة.")
@@ -1019,11 +1057,14 @@ async def cmd_xo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ====================================================
 async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    data = query.data or ""
+    if data.startswith("owner_group:"):
+        await handle_owner_callback(update, context)
+        return
     try:
         await query.answer()
     except Exception:
         pass
-    data = query.data
     uid = update.effective_user.id
     chat_id = getattr(getattr(query, 'message', None), 'chat_id', None)
     bot_obj = await context.bot.get_me()
@@ -1047,7 +1088,8 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "main_menu":
         text = "🌸 **روبوت لارا (V5.9 Legendary):**\n\n✨ اختر من القائمة أدناه:"
-        await query.message.edit_text(text, reply_markup=get_main_keyboard(bot_obj.username, uid == ADMIN_ID), parse_mode=None)
+        owner_here = await is_group_owner(update, context)
+        await query.message.edit_text(text, reply_markup=get_main_keyboard(bot_obj.username, uid == ADMIN_ID, owner_here), parse_mode=None)
 
     elif data == "cmd_user":
         msg = (
@@ -1070,7 +1112,8 @@ async def button_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if await is_user_subscribed(update.effective_user.id, context):
             await query.answer("✅ تم التحقق بنجاح! أهلاً بك.", show_alert=True)
             text = "🌸 **روبوت لارا (V5.9 Legendary):**\n\n✨ اختر من القائمة أدناه:"
-            await query.message.edit_text(text, reply_markup=get_main_keyboard(bot_obj.username, uid == ADMIN_ID), parse_mode=None)
+            owner_here = await is_group_owner(update, context)
+            await query.message.edit_text(text, reply_markup=get_main_keyboard(bot_obj.username, uid == ADMIN_ID, owner_here), parse_mode=None)
         else:
             await query.answer("❌ لم تشترك في القناة بعد! يرجى الاشتراك في القناة أولاً.", show_alert=True)
     elif data == "vip_menu":
@@ -1531,6 +1574,150 @@ async def handle_owner_subs_callback(update: Update, context: ContextTypes.DEFAU
     keyboard = [[InlineKeyboardButton("🔙 العودة للرئيسية", callback_data="main_menu")]]
     await query.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
+
+async def _run_group_custom_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    message, chat, actor = update.effective_message, update.effective_chat, update.effective_user
+    if not message or not message.text or not chat or chat.type not in ("group", "supergroup") or not actor:
+        return False
+    group_settings = await group_feature_store.get_settings(chat.id)
+    if group_settings and not group_settings.custom_commands_enabled:
+        return False
+    text = " ".join(message.text.strip().split())
+    commands = await group_feature_store.list_commands(chat.id)
+    command = next((item for item in sorted(commands, key=lambda c: len(c.name), reverse=True)
+                    if text.casefold() == item.normalized_name
+                    or text.casefold().startswith(item.normalized_name + " ")), None)
+    if command is None:
+        return False
+    if not command.enabled:
+        await message.reply_text("⏸ هذا الأمر متوقف في هذه المجموعة.")
+        return True
+
+    if command.required_role != "ADMIN" or command.action not in ACTION_REGISTRY:
+        await message.reply_text("❌ إعدادات هذا الأمر غير صالحة؛ لم يتم تنفيذ أي إجراء.")
+        return True
+    if not await is_group_admin(update, context):
+        await message.reply_text("❌ هذا الأمر مخصص لمشرفي المجموعة.")
+        return True
+
+    action = command.action
+    reply = message.reply_to_message
+    tail = text[len(command.name):].strip()
+    target_id = reply.from_user.id if reply and reply.from_user else None
+    target_name = reply.from_user.first_name if reply and reply.from_user else ""
+    requested_username = None
+    if target_id is None:
+        for entity in message.entities or ():
+            if str(entity.type) == "text_mention" and getattr(entity, "user", None):
+                target_id = entity.user.id
+                target_name = entity.user.first_name or ""
+                break
+    if target_id is None:
+        match = re.search(r"(?<!\w)(\d{5,20})(?!\w)", tail)
+        if match:
+            target_id = int(match.group(1))
+    if target_id is None:
+        username_match = re.search(r"(?<!\w)@([A-Za-z0-9_]{5,32})\b", tail)
+        if username_match:
+            requested_username = username_match.group(1).casefold()
+            async with async_session() as session:
+                cached_user = await session.scalar(select(User).where(
+                    func.lower(User.username) == requested_username))
+                if cached_user:
+                    target_id = int(cached_user.telegram_id)
+                    target_name = cached_user.first_name or ""
+    if command.target_type == "MESSAGE" and not reply:
+        await message.reply_text("⚠️ استخدم الأمر بالرد على الرسالة المطلوب تنفيذ الإجراء عليها.")
+        return True
+    if command.target_type in {"USER", "USER_ID"} and target_id is None:
+        if "@" in tail:
+            await message.reply_text("⚠️ لم أتمكن من مطابقة @username بمستخدم معروف والتحقق من عضويته. استخدم الرد على رسالته أو Telegram user ID.")
+        else:
+            await message.reply_text("⚠️ استخدم الأمر بالرد على العضو أو أرفق Telegram user ID.")
+        return True
+
+    target_member = None
+    if target_id is not None and action not in {"UNBAN"}:
+        try:
+            target_member = await context.bot.get_chat_member(chat.id, target_id)
+        except Exception:
+            await message.reply_text("❌ لم أتمكن من التحقق من العضو في هذه المجموعة؛ لم يُنفذ الإجراء.")
+            return True
+        target_status = target_member.status
+        if target_status in {"creator", "owner", "administrator"} or target_id in {actor.id, context.bot.id}:
+            await message.reply_text("❌ هذا العضو محمي ولا يمكن استهدافه بهذا الأمر.")
+            return True
+        if requested_username:
+            resolved_username = getattr(target_member.user, "username", None)
+            if not resolved_username or resolved_username.casefold() != requested_username:
+                await message.reply_text("❌ تعذر التحقق من أن @username هو العضو نفسه داخل هذه المجموعة.")
+                return True
+
+    try:
+        if action == "MUTE":
+            duration = int(command.parameters.get("duration_seconds", 0))
+            kwargs = {"chat_id": chat.id, "user_id": target_id,
+                      "permissions": ChatPermissions(can_send_messages=False)}
+            if duration:
+                from datetime import datetime, timedelta, timezone
+                kwargs["until_date"] = datetime.now(timezone.utc) + timedelta(seconds=duration)
+            await context.bot.restrict_chat_member(**kwargs)
+            result = f"🔇 تم كتم {target_name or target_id}" + (f" لمدة {duration // 60} دقيقة." if duration else ".")
+        elif action == "UNMUTE":
+            permissions = ChatPermissions(can_send_messages=True, can_send_audios=True,
+                can_send_documents=True, can_send_photos=True, can_send_videos=True,
+                can_send_other_messages=True)
+            await context.bot.restrict_chat_member(chat.id, target_id, permissions=permissions)
+            result = f"🔊 تم فك الكتم عن {target_name or target_id}."
+        elif action == "KICK":
+            await context.bot.ban_chat_member(chat.id, target_id)
+            await context.bot.unban_chat_member(chat.id, target_id, only_if_banned=True)
+            result = f"👢 تم طرد {target_name or target_id}."
+        elif action == "BAN":
+            await context.bot.ban_chat_member(chat.id, target_id)
+            result = f"🚫 تم حظر {target_name or target_id}."
+        elif action == "UNBAN":
+            await context.bot.unban_chat_member(chat.id, target_id, only_if_banned=True)
+            result = f"♻️ تم فك الحظر عن {target_id}."
+        elif action == "WARN":
+            count = await add_moderation_warning(chat.id, target_id, "تحذير بأمر مخصص", reply.message_id if reply else None)
+            if count >= MODERATION_WARNING_LIMIT:
+                await context.bot.restrict_chat_member(chat.id, target_id, permissions=ChatPermissions(can_send_messages=False))
+                await reset_moderation_warnings(chat.id, target_id)
+                result = f"⚠️ اكتملت التحذيرات وتم كتم {target_name or target_id} تلقائيًا."
+            else:
+                result = f"⚠️ تم تسجيل التحذير ({count}/{MODERATION_WARNING_LIMIT}) على {target_name or target_id}."
+        elif action == "DELETE":
+            await reply.delete()
+            result = "🗑 تم حذف الرسالة المردود عليها."
+        elif action == "PIN":
+            await context.bot.pin_chat_message(chat.id, reply.message_id)
+            result = "📌 تم تثبيت الرسالة المردود عليها."
+        elif action == "UNPIN":
+            await context.bot.unpin_chat_message(chat.id, reply.message_id)
+            result = "📍 تمت إزالة تثبيت الرسالة."
+        elif action == "SEND_MESSAGE":
+            body = render_welcome(command.parameters.get("message", ""), name=actor.first_name or "",
+                                  username=actor.username, user_id=actor.id, chat_name=chat.title)
+            await context.bot.send_message(chat.id, body or "")
+            result = None
+        else:
+            await message.reply_text("❌ هذا الإجراء غير مدعوم.")
+            return True
+        if result:
+            await message.reply_text(result)
+    except Exception as exc:
+        logger.warning("Custom group action failed (%s): %s", action, type(exc).__name__)
+        detail = re.sub(r"\s+", " ", str(exc)).strip()[:240]
+        await message.reply_text(f"❌ تعذر تنفيذ الإجراء ({type(exc).__name__}): {detail or 'خطأ غير موصوف من Telegram.'}")
+    return True
+
+
+async def _is_exact_custom_command(chat_id: int, text: str) -> bool:
+    normalized = " ".join(text.casefold().split())
+    return any(command.normalized_name == normalized
+               for command in await group_feature_store.list_commands(chat_id))
+
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id if update.effective_user else None
     if user_id and not await is_subscribed(user_id, context):
@@ -1693,98 +1880,6 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await status_msg.edit_text(f"❌ فشل تحميل الأغنية: {res.get('error', 'غير متوفرة')}")
         return
 
-    # 8. محادثة لارا المحلية: استدعاء واضح أو متابعة قصيرة ترد على لارا.
-    # Keep existing feature/admin dispatch above and below this point intact.
-    admin_chat_bypass = [
-        "لارا طردي", "لارا اطردي", "لارا كتمي", "لارا اكتمي",
-        "لارا فك الكتم", "لارا فكي الكتم", "لارا الغاء كتم", "لارا حذري", "لارا تحذير",
-        "لارا ثبتي", "لارا تثبيت", "لارا اقفلي",
-        "لارا قفل المحادثة", "لارا إغلاق المحادثة",
-        "لارا افتحي", "لارا فتح المحادثة", "لارا فتح الجروب",
-        "لارا قفل الجروب",
-        "طرد", "اطردي", "كتم", "اكتمي", "فك الكتم",
-        "الغاء كتم", "حذري", "تحذير", "ثبتي", "تثبيت",
-        "اقفلي", "قفل المحادثة", "إغلاق المحادثة",
-        "افتحي", "فتح المحادثة", "فتح الجروب", "قفل الجروب",
-    ]
-    is_legacy_admin_text = any(text == cmd or text.startswith(cmd + " ") for cmd in admin_chat_bypass)
-    from arsyra.conversation import is_existing_feature_command, strip_invocation
-    is_legacy_admin_text = is_legacy_admin_text or is_existing_feature_command(strip_invocation(text))
-    if not is_legacy_admin_text:
-        from arsyra.conversation import (
-            InvocationLevel, classify_intent,
-            conversation_context, detect_invocation,
-            is_telegram_command, natural_fallback, strip_invocation,
-        )
-
-        replied = update.message.reply_to_message
-        replied_user_id = (replied.from_user.id if replied and replied.from_user else None)
-        replied_message_id = replied.message_id if replied else None
-        reply_to_lara = conversation_context.reply_targets_lara(
-            chat_id=chat_id,
-            user_id=uid,
-            replied_message_id=replied_message_id,
-            replied_user_id=replied_user_id,
-            bot_user_id=getattr(context.bot, "id", None),
-        )
-        reply_to_other = bool(replied and not reply_to_lara)
-
-        if not is_telegram_command(text) and not is_existing_feature_command(text):
-            decision = conversation_context.decide(
-                chat_id=chat_id,
-                user_id=uid,
-                text=text,
-                reply_to_bot=reply_to_lara,
-                reply_to_other=reply_to_other,
-            )
-            if decision.level == InvocationLevel.DIRECT_INVOCATION:
-                query_ai = strip_invocation(text) if detect_invocation(text) else text.strip()
-                normalized_query = query_ai.lower().replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
-                response_text = None
-                if "من انت" in normalized_query:
-                    response_text = "أنا لارا، مساعدتك الذكية والمطورة بواسطة المبدع litharm! 🌸"
-                elif "كيفك" in normalized_query or "كيف حالك" in normalized_query:
-                    response_text = random.choice([
-                        "بأفضل حال والحمد لله! كيف أساعدك اليوم؟ ✨",
-                        "منيحة الحمدلله 😄 وإنت كيفك؟",
-                        "تمام، مبسوطة إني عم بحكي معك 🌷",
-                    ])
-                elif "من طورك" in normalized_query:
-                    response_text = "تم برمجتي بواسطة المطور الأسطوري litharm 🚀"
-
-                if response_text is None and normalized_query in ("نكتة", "نكت"):
-                    response_text = f"😂 {random.choice(JOKES)}"
-
-                context_query = conversation_context.contextual_query(
-                    chat_id=chat_id, user_id=uid, text=query_ai,
-                    continued=decision.continued,
-                )
-                intent = classify_intent(query_ai, continued=decision.continued)
-                if response_text is None:
-                    # ArSyra's existing exact replies and dialogue corpus stay first in the chain.
-                    from arsyra.engine import ask as arsyra_ask
-                    arsyra_reply = arsyra_ask(context_query)
-                    if arsyra_reply:
-                        response_text = f"🤖 **لارا:** {arsyra_reply}"
-                if response_text is None:
-                    old_user_text = conversation_context.previous_user_text(chat_id, uid)
-                    response_text = natural_fallback(
-                        query_ai, intent,
-                        topic=old_user_text if decision.continued else "",
-                    )
-                    response_text = f"🤖 **لارا:** {response_text}"
-
-                sent = await update.message.reply_text(response_text, parse_mode=None)
-                conversation_context.record_reply(
-                    chat_id=chat_id,
-                    user_id=uid,
-                    user_text=text,
-                    bot_message_id=getattr(sent, "message_id", None),
-                    bot_text=response_text,
-                    continued=decision.continued,
-                )
-                return sent
-
     # 9. نظام الإدارة المحمي الشامل للمجموعات (خاص بالمشرفين فقط)
     if is_group:
         kick_cmds = ["طرد", "اطردي", "لارا طردي", "لارا اطردي"]
@@ -1797,7 +1892,11 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         all_admin_triggers = kick_cmds + mute_cmds + unmute_cmds + warn_cmds + pin_cmds + lock_cmds + unlock_cmds
 
-        if any(text == cmd or text.startswith(cmd) for cmd in all_admin_triggers):
+        matches_admin_prefix = any(text == cmd or text.startswith(cmd) for cmd in all_admin_triggers)
+        custom_command_owns_exact_name = (
+            matches_admin_prefix and await _is_exact_custom_command(chat_id, text)
+        )
+        if matches_admin_prefix and not custom_command_owns_exact_name:
             member = await context.bot.get_chat_member(chat_id, uid)
             if member.status not in ['administrator', 'creator'] and uid != ADMIN_ID:
                 return await update.message.reply_text("❌ هذا الأمر مخصص للمشرفين فقط!")
@@ -1865,10 +1964,140 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if text in kick_cmds + mute_cmds + unmute_cmds + warn_cmds + pin_cmds:
                     return await update.message.reply_text("⚠️ يرجى استخدام هذا الأمر بالرد على رسالة العضو المطلوب!")
 
+    # 10. طبقة المحادثة المحلية منخفضة الأولوية بعد مسارات الإدارة والميزات.
+    # Preserve active cashout and VIP video workflows from generic Lara replies.
+    if (context.user_data.get("awaiting_phone")
+            or context.user_data.get("waiting_for_video")
+            or uid in ACTIVE_AI_USERS):
+        return
+
+    if text in {"إعدادات المجموعة", "اعدادات المجموعة", "لوحة مالك المجموعة"} and is_group:
+        if await is_group_owner(update, context):
+            await show_owner_menu(update.message, chat_id)
+        else:
+            await update.message.reply_text("❌ إعدادات المجموعة متاحة لمالك المجموعة فقط.")
+        return
+    if text in {"تغيير رسالة الترحيب", "تغيير الرسالة الترحيبية"} and is_group:
+        if await is_group_owner(update, context):
+            context.user_data[GROUP_OWNER_FLOW_KEY] = {"chat_id": chat_id, "step": "welcome"}
+            await update.message.reply_text("📝 أرسل رسالة الترحيب الجديدة. المتغيرات: {name} {username} {user_id} {chat_name}")
+        else:
+            await update.message.reply_text("❌ تغيير رسالة الترحيب متاح لمالك المجموعة فقط.")
+        return
+    if await handle_owner_flow_message(update, context):
+        return
+    if await _run_group_custom_command(update, context):
+        return
+
+    admin_chat_bypass = [
+        "لارا طردي", "لارا اطردي", "لارا كتمي", "لارا اكتمي",
+        "لارا فك الكتم", "لارا فكي الكتم", "لارا الغاء كتم", "لارا حذري", "لارا تحذير",
+        "لارا ثبتي", "لارا تثبيت", "لارا اقفلي",
+        "لارا قفل المحادثة", "لارا إغلاق المحادثة",
+        "لارا افتحي", "لارا فتح المحادثة", "لارا فتح الجروب",
+        "لارا قفل الجروب",
+        "لارا نسبة الحب", "لارا اختراق", "لارا نكتة", "لارا نكت", "لارا قصف",
+        "اختراق", "نسبة الحب", "نكتة", "نكت", "قصف", "اقصفي",
+        "طرد", "اطردي", "كتم", "اكتمي", "فك الكتم",
+        "الغاء كتم", "حذري", "تحذير", "ثبتي", "تثبيت",
+        "اقفلي", "قفل المحادثة", "إغلاق المحادثة",
+        "افتحي", "فتح المحادثة", "فتح الجروب", "قفل الجروب",
+    ]
+    is_legacy_admin_text = any(text == cmd or text.startswith(cmd + " ") for cmd in admin_chat_bypass)
+    from arsyra.conversation import is_existing_feature_command, strip_invocation
+    is_legacy_admin_text = is_legacy_admin_text or is_existing_feature_command(strip_invocation(text))
+    if not is_legacy_admin_text:
+        from arsyra.conversation import (
+            ConversationIntent, InvocationLevel, calculate_local_request, classify_intent,
+            conversation_context, detect_invocation,
+            is_telegram_command, natural_fallback, strip_invocation,
+        )
+
+        replied = update.message.reply_to_message
+        replied_user_id = (replied.from_user.id if replied and replied.from_user else None)
+        replied_message_id = replied.message_id if replied else None
+        reply_to_lara = conversation_context.reply_targets_lara(
+            chat_id=chat_id,
+            user_id=uid,
+            replied_message_id=replied_message_id,
+            replied_user_id=replied_user_id,
+            bot_user_id=getattr(context.bot, "id", None),
+        )
+        reply_to_other = bool(replied and not reply_to_lara)
+
+        if not is_telegram_command(text) and not is_existing_feature_command(text):
+            decision = conversation_context.decide(
+                chat_id=chat_id,
+                user_id=uid,
+                text=text,
+                reply_to_bot=reply_to_lara,
+                reply_to_other=reply_to_other,
+            )
+            if decision.level == InvocationLevel.DIRECT_INVOCATION:
+                query_ai = strip_invocation(text) if detect_invocation(text) else text.strip()
+                normalized_query = query_ai.lower().replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+                response_text = None
+                if "من انت" in normalized_query:
+                    response_text = "أنا لارا، مساعدتك الذكية والمطورة بواسطة المبدع litharm! 🌸"
+                elif "كيفك" in normalized_query or "كيف حالك" in normalized_query:
+                    response_text = random.choice([
+                        "بأفضل حال والحمد لله! كيف أساعدك اليوم؟ ✨",
+                        "منيحة الحمدلله 😄 وإنت كيفك؟",
+                        "تمام، مبسوطة إني عم بحكي معك 🌷",
+                    ])
+                elif "من طورك" in normalized_query:
+                    response_text = "تم برمجتي بواسطة المطور الأسطوري litharm 🚀"
+
+                if response_text is None and normalized_query in ("نكتة", "نكت"):
+                    response_text = f"😂 {random.choice(JOKES)}"
+
+                context_query = conversation_context.contextual_query(
+                    chat_id=chat_id, user_id=uid, text=query_ai,
+                    continued=decision.continued,
+                )
+                details = conversation_context.conversation_details(chat_id, uid)
+                intent = classify_intent(
+                    query_ai,
+                    continued=decision.continued,
+                    previous_intent=details.get("previous_intent"),
+                    pending_question=details.get("pending_question"),
+                )
+                if intent == ConversationIntent.CALCULATION:
+                    result = calculate_local_request(query_ai)
+                    if result is not None:
+                        response_text = f"الناتج: {result}"
+                if response_text is None:
+                    # ArSyra's existing exact replies and dialogue corpus stay first in the chain.
+                    from arsyra.engine import ask as arsyra_ask
+                    arsyra_reply = arsyra_ask(context_query)
+                    if arsyra_reply:
+                        response_text = f"🤖 **لارا:** {arsyra_reply}"
+                if response_text is None:
+                    response_text = natural_fallback(
+                        query_ai, intent,
+                        topic=details.get("previous_topic", "") if decision.continued else "",
+                    )
+                    response_text = f"🤖 **لارا:** {response_text}"
+
+                sent = await update.message.reply_text(response_text, parse_mode=None)
+                conversation_context.record_reply(
+                    chat_id=chat_id,
+                    user_id=uid,
+                    user_text=text,
+                    bot_message_id=getattr(sent, "message_id", None),
+                    bot_text=response_text,
+                    continued=decision.continued,
+                    intent=intent,
+                )
+                return sent
+
+
 # ====================================================
 # --- التشغيل والنواة الأساسية ---
 # ====================================================
 def main():
+    if not BOT_TOKEN:
+        raise RuntimeError("Set TELEGRAM_BOT_TOKEN in the runtime environment before starting Lara.")
     asyncio.run(init_db())
     application_builder = (Application.builder().token(BOT_TOKEN)
                            .post_init(video_editor_post_init)

@@ -5,7 +5,10 @@ import re
 import random
 import time
 import unicodedata
+import ast
+import operator
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from enum import Enum
 
 
@@ -32,6 +35,30 @@ class ConversationIntent(str, Enum):
     CLARIFICATION = "CLARIFICATION"
     EMOTIONAL_RESPONSE = "EMOTIONAL/CASUAL_RESPONSE"
     COMMAND_TO_EXISTING_LARA_FEATURE = "COMMAND_TO_EXISTING_LARA_FEATURE"
+    CALCULATION = "CALCULATION"
+    ROAST = "ROAST"
+    CORRECTION = "CORRECTION"
+    CONFIRMATION = "CONFIRMATION"
+    REJECTION = "REJECTION"
+    GENERAL_CHAT = "GENERAL_CHAT"
+    UNKNOWN = "UNKNOWN"
+
+
+class ConversationState(str, Enum):
+    IDLE = "IDLE"
+    ACTIVE = "ACTIVE"
+    WAITING_FOR_FOLLOWUP = "WAITING_FOR_FOLLOWUP"
+    WAITING_FOR_CLARIFICATION = "WAITING_FOR_CLARIFICATION"
+    WAITING_FOR_CONFIRMATION = "WAITING_FOR_CONFIRMATION"
+
+
+@dataclass
+class ConversationMessage:
+    role: str
+    text: str
+    intent: ConversationIntent | None
+    timestamp: float
+    language: str
 
 
 @dataclass
@@ -43,6 +70,11 @@ class LaraTurn:
     last_bot_text: str = ""
     last_reply_at: float = 0.0
     last_input_normalized: str = ""
+    state: ConversationState = ConversationState.ACTIVE
+    history: list[ConversationMessage] = field(default_factory=list)
+    previous_intent: ConversationIntent | None = None
+    previous_topic: str = ""
+    pending_question: str | None = None
 
 
 @dataclass(frozen=True)
@@ -71,6 +103,8 @@ class LaraConversationContext:
             turn = None
         if is_telegram_command(text):
             return InvocationDecision(InvocationLevel.NO_INVOCATION, "telegram_command")
+        if is_existing_feature_command(text) or is_existing_feature_command(strip_invocation(text)):
+            return InvocationDecision(InvocationLevel.NO_INVOCATION, "protected_existing_feature")
         direct = detect_invocation(text)
         normalized = normalize_invocation(text)
         if direct:
@@ -82,7 +116,8 @@ class LaraConversationContext:
             return InvocationDecision(InvocationLevel.DIRECT_INVOCATION, "reply_to_lara", bool(turn))
         if reply_to_other:
             return InvocationDecision(InvocationLevel.NO_INVOCATION, "reply_to_other_user")
-        if turn and turn.turns < self.max_followups and looks_like_follow_up(text):
+        if (turn and turn.turns < self.max_followups
+                and looks_like_follow_up(text, awaiting_clarification=bool(turn.pending_question))):
             return InvocationDecision(InvocationLevel.DIRECT_INVOCATION, "active_follow_up", True)
         # A mention buried in a statement or ambiguous short text never triggers a reply.
         if has_lara_name(text):
@@ -91,7 +126,8 @@ class LaraConversationContext:
 
     def record_reply(self, *, chat_id: int, user_id: int, user_text: str,
                      bot_message_id: int | None, bot_text: str,
-                     continued: bool = False, now: float | None = None) -> None:
+                     continued: bool = False, intent: ConversationIntent | None = None,
+                     now: float | None = None) -> None:
         now = time.monotonic() if now is None else now
         key = (int(chat_id), int(user_id))
         self.prune(now)
@@ -100,6 +136,30 @@ class LaraConversationContext:
             self._turns.pop(oldest_key, None)
         previous = self._turns.get(key)
         turns = (previous.turns + 1) if (continued and previous) else 1
+        correction = intent == ConversationIntent.CORRECTION
+        topic = (extract_topic(user_text) if correction else
+                 previous.previous_topic if continued and previous else extract_topic(user_text))
+        pending = _response_has_pending_question(bot_text)
+        history = list(previous.history) if continued and previous else []
+        current_time = now
+        history.extend([
+            ConversationMessage("user", user_text[:500], intent, current_time, detect_language(user_text)),
+            ConversationMessage("lara", bot_text[:1000], None, current_time, detect_language(bot_text)),
+        ])
+        if intent == ConversationIntent.CONFIRMATION:
+            state = ConversationState.ACTIVE
+            pending = None
+        elif intent == ConversationIntent.REJECTION:
+            state = ConversationState.ACTIVE
+            pending = None
+        elif correction or _response_requests_clarification(bot_text):
+            state = ConversationState.WAITING_FOR_CLARIFICATION
+        elif _response_requests_confirmation(bot_text):
+            state = ConversationState.WAITING_FOR_CONFIRMATION
+        elif pending:
+            state = ConversationState.WAITING_FOR_FOLLOWUP
+        else:
+            state = ConversationState.ACTIVE
         self._turns[key] = LaraTurn(
             expires_at=now + self.ttl_seconds,
             bot_message_id=bot_message_id,
@@ -108,6 +168,11 @@ class LaraConversationContext:
             last_bot_text=bot_text[:1000],
             last_reply_at=now,
             last_input_normalized=normalize_invocation(user_text),
+            state=state,
+            history=history[-8:],
+            previous_intent=intent,
+            previous_topic=topic,
+            pending_question=bot_text[:500] if pending else None,
         )
 
     def reply_targets_lara(self, *, chat_id: int, user_id: int,
@@ -128,13 +193,26 @@ class LaraConversationContext:
         if not turn:
             return text
         # Carry a few topic words into terse follow-ups ("طيب وكيف أستخدمه؟").
-        topic = [w for w in normalize_invocation(turn.last_user_text).split()
-                 if w not in _FILLER and not _is_name(w) and len(w) > 1]
-        return (text + " " + " ".join(topic[-3:])).strip() if topic else text
+        if classify_intent(text, continued=True) == ConversationIntent.CORRECTION:
+            return text
+        topic = turn.previous_topic
+        return (text + " " + topic).strip() if topic else text
 
     def previous_user_text(self, chat_id: int, user_id: int) -> str:
         turn = self._turns.get((int(chat_id), int(user_id)))
         return turn.last_user_text if turn else ""
+
+    def conversation_details(self, chat_id: int, user_id: int) -> dict[str, object]:
+        turn = self._turns.get((int(chat_id), int(user_id)))
+        if not turn:
+            return {}
+        return {
+            "state": turn.state,
+            "history": tuple(turn.history),
+            "previous_intent": turn.previous_intent,
+            "previous_topic": turn.previous_topic,
+            "pending_question": turn.pending_question,
+        }
 
     def prune(self, now: float | None = None) -> int:
         now = time.monotonic() if now is None else now
@@ -145,27 +223,44 @@ class LaraConversationContext:
 
 
 _DIACRITICS = re.compile(r"[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]")
-_NAME_RE = re.compile(r"(?:لارا+|lara+|بوت+|bot+)", re.IGNORECASE)
 _FILLER = {
     "طيب", "طب", "و", "او", "يعني", "كيف", "شو", "ما", "ماذا", "هل", "ممكن",
     "لارا", "lara", "بوت", "يا", "من", "انت", "انتي", "لو", "سمحتي", "بليز",
 }
 _FOLLOW_UP_RE = re.compile(
-    r"^(?:وكمان|وفي شي تاني|وفي شيء تاني|في شي تاني|في شيء اخر|وهل|وكيف|واذا|وبعدين|"
+    r"^(?:وكمان|كمان|وفي شي تاني|وفي شيء تاني|في شي تاني|في شيء اخر|وهل|وكيف|واذا|وبعدين|"
     r"ما فهمت|مش فاهم|مو فاهم|ليش|لماذا|كيف|ممكن توضحي|ممكن تشرحي|"
-    r"اشرح(?:ي)?لي|فهميني|وضح(?:ي)?لي|كملي|تابعي|احكيلي اكتر|اها|اه|تمام|اوكي)",
+    r"اشرح(?:ي)?لي|فهميني|وضح(?:ي)?لي|كمل(?:ي)?|تابعي|احكيلي اكتر|"
+    r"شو قصدك|عنجد|متاكده|متاكد|طيب على|طيب بال|طيب بالم|طيب عن|اها|اه|اي|ايوه|نعم|صح|تمام|اوكي)",
     re.IGNORECASE,
 )
+
+_ARABIZI = {
+    "ya": "يا", "keefek": "كيفك", "kifak": "كيفك", "kifik": "كيفك",
+    "keefak": "كيفك", "kefak": "كيفك", "keef": "كيف", "kif": "كيف",
+    "shou": "شو", "shu": "شو", "sho": "شو", "leh": "ليش", "leish": "ليش",
+    "wen": "وين", "wein": "وين", "weinak": "وينك", "wenak": "وينك",
+    "3adi": "عادي", "3adle": "عادي", "3lech": "ليش", "3ala": "على",
+    "ma": "ما", "fhemet": "فهمت", "ma fhemet": "ما فهمت", "merci": "شكرا",
+    "merciii": "شكرا", "thx": "شكرا", "lol": "هههه",
+}
 
 
 def normalize_invocation(text: str) -> str:
     value = unicodedata.normalize("NFKC", str(text or "")).lower()
     value = _DIACRITICS.sub("", value)
-    value = value.translate(str.maketrans({"أ": "ا", "إ": "ا", "آ": "ا", "ٱ": "ا", "ى": "ي"}))
+    value = value.translate(str.maketrans({"أ": "ا", "إ": "ا", "آ": "ا", "ٱ": "ا", "ى": "ي", "ة": "ه", "ؤ": "و", "ئ": "ي"}))
     value = re.sub(r"\bl\s*a\s*r\s*a+\b", "lara", value, flags=re.IGNORECASE)
     value = re.sub(r"ل\s*ا\s*ر\s*ا+", "لارا", value)
     value = re.sub(r"([\w\u0600-\u06ff])\1{2,}", r"\1\1", value)
     value = re.sub(r"[^\w@\s]", " ", value, flags=re.UNICODE)
+    value = re.sub(r"\s+", " ", value).strip()
+    # Convert only common standalone Arabizi words; leave unknown Latin words untouched.
+    tokens = value.split()
+    normalized_tokens = []
+    for token in tokens:
+        normalized_tokens.append(_ARABIZI.get(token, token))
+    value = " ".join(normalized_tokens)
     return re.sub(r"\s+", " ", value).strip()
 
 
@@ -174,11 +269,20 @@ def is_telegram_command(text: str) -> bool:
 
 
 def has_lara_name(text: str) -> bool:
-    return bool(_NAME_RE.search(normalize_invocation(text)))
+    return any(_is_name(word) for word in normalize_invocation(text).split())
 
 
 def _is_name(word: str) -> bool:
-    return bool(re.fullmatch(r"(?:لارا+|lara+|بوت+|bot+)", word, re.IGNORECASE))
+    if re.fullmatch(r"(?:لارا+|lara+|بوت+|bot+)", word, re.IGNORECASE):
+        return True
+    if len(word) < 3 or len(word) > 5:
+        return False
+    return any(SequenceMatcher(None, word, target).ratio() >= 0.75
+               for target in ("لارا", "lara", "بوت", "bot"))
+
+
+def _is_reported_mention(word: str) -> bool:
+    return word.startswith(("قال", "حكى", "حكت", "حكالي", "حكتلي", "تقول", "بتقول", "اسمه", "اسمها"))
 
 
 def detect_invocation(text: str) -> bool:
@@ -191,16 +295,15 @@ def detect_invocation(text: str) -> bool:
     words = raw.split()
     if not words:
         return False
-    name_positions = [i for i, word in enumerate(words)
-                      if re.fullmatch(r"(?:لارا+|lara+|بوت+|bot+)", word, re.IGNORECASE)]
+    name_positions = [i for i, word in enumerate(words) if _is_name(word)]
     if not name_positions:
         return False
     for index in name_positions:
         before = words[:index]
         after = words[index + 1:]
         if not before:
-            if not after or after[0] in {"قال", "قالت", "حكت", "اسم", "صديقتي", "صديقي", "اسمها", "اسمه"}:
-                    return not after and words[index].startswith(("لارا", "lara"))
+            if after and (_is_reported_mention(after[0]) or after[0] in {"صديقتي", "صديقي", "صاحبي", "صاحبتي"}):
+                return False
             return True
         if before[-1] == "يا":
             return True
@@ -214,17 +317,69 @@ def detect_invocation(text: str) -> bool:
     return False
 
 
-def looks_like_follow_up(text: str) -> bool:
+def looks_like_follow_up(text: str, *, awaiting_clarification: bool = False) -> bool:
     normalized = normalize_invocation(text)
     if not normalized or is_telegram_command(normalized):
         return False
-    if normalized in {"طيب", "طب", "يعني", "بس", "اه", "اها", "تمام", "اوكي"}:
+    if is_correction(normalized):
         return True
-    if re.match(r"^(?:طيب|طب)\s*و?\s*(?:كيف|ليش|لماذا|ممكن|اشرح|فهميني|وضح|كملي|تابعي|شو يعني)", normalized):
+    if normalized in {"طيب", "طب", "يعني", "بس", "اه", "اها", "تمام", "اوكي", "اي", "ايوه", "ايوا", "نعم", "لا", "عنجد", "صح", "كمل", "كملي", "وبعدين", "شو رايك", "شو رايك انت"}:
         return True
-    if re.match(r"^(?:و|يعني|بس)\s+(?:كيف|ليش|لماذا|هل|ممكن|شو يعني|اشرح|فهميني)", normalized):
+    if re.match(r"^(?:طيب|طب)\s*و?\s*(?:كيف|ليش|لماذا|ممكن|اشرح|فهميني|وضح|كملي|كمل|تابعي|شو يعني|على|بال|بالم|عن)", normalized):
         return True
-    return bool(_FOLLOW_UP_RE.search(normalized))
+    if re.match(r"^(?:و|يعني|بس)\s+(?:كيف|ليش|لماذا|هل|ممكن|شو يعني|اشرح|فهميني|وضح)", normalized):
+        return True
+    if _FOLLOW_UP_RE.search(normalized):
+        return True
+    if awaiting_clarification:
+        tokens = normalized.split()
+        # A short answer to Lara's outstanding question can continue without a name.
+        has_question_form = bool(re.match(r"^(?:شو|كيف|ليش|وين|متى|هل|ماذا)\b", normalized))
+        return 0 < len(tokens) <= 4 and not has_question_form
+    return False
+
+
+def is_correction(text: str) -> bool:
+    t = normalize_invocation(text)
+    return bool(re.search(r"^(?:لا|مو|مش)\s*(?:قصدي|قصدت|انا قصدي|يعني قصدي)|^قصدي\b|^لا قصدي شي تاني", t))
+
+
+def _response_has_pending_question(text: str) -> bool:
+    return "؟" in text or "?" in text or _response_requests_clarification(text)
+
+
+def _response_requests_clarification(text: str) -> bool:
+    normalized = normalize_invocation(text)
+    return any(token in normalized for token in ("وضحلي", "حدديلي", "حددللي", "اي جزء", "اي نقطه", "احكيلي شو", "اكتب سؤالك", "قصدك الجديد"))
+
+
+def _response_requests_confirmation(text: str) -> bool:
+    normalized = normalize_invocation(text)
+    return any(token in normalized for token in ("بدك اتابع", "هل تريد", "تريدين المتابعه", "موافق", "موافقه"))
+
+
+def detect_language(text: str) -> str:
+    has_arabic = bool(re.search(r"[\u0600-\u06ff]", text))
+    has_latin = bool(re.search(r"[A-Za-z]", text))
+    if has_arabic and has_latin:
+        return "mixed"
+    if has_arabic:
+        return "ar"
+    if has_latin:
+        return "latin_or_arabizi"
+    return "unknown"
+
+
+def extract_topic(text: str) -> str:
+    normalized = normalize_invocation(strip_invocation(text))
+    if re.search(r"(?:شي تاني|شي مختلف|موضوع تاني|موضوع مختلف)", normalized):
+        return ""
+    normalized = re.sub(r"^(?:لا|مو|مش)?\s*(?:قصدي|قصدت|يعني قصدي)\s*", "", normalized)
+    tokens = [token for token in normalized.split()
+              if token not in _FILLER and not _is_name(token)
+              and token not in {"يعني", "بدي", "عايز", "اريد", "ممكن", "تساعديني", "ساعدني", "اشرح", "فهميني"}
+              and len(token) > 1]
+    return " ".join(tokens[-4:])[:140]
 
 
 def strip_invocation(text: str) -> str:
@@ -237,12 +392,28 @@ def strip_invocation(text: str) -> str:
     return re.sub(r"\s+", " ", value).strip(" \t\r\n؟?!.,،:؛")
 
 
-def classify_intent(text: str, *, continued: bool = False) -> ConversationIntent:
+def classify_intent(text: str, *, continued: bool = False,
+                    previous_intent: ConversationIntent | None = None,
+                    pending_question: str | None = None) -> ConversationIntent:
     t = normalize_invocation(text)
+    has_question = "؟" in text or "?" in text
     if not t or re.fullmatch(r"(?:لارا+|lara+|بوت+|bot+)", t):
         return ConversationIntent.EMOTIONAL_RESPONSE
     if is_existing_feature_command(t):
         return ConversationIntent.COMMAND_TO_EXISTING_LARA_FEATURE
+    if is_correction(t):
+        return ConversationIntent.CORRECTION
+    if t in {"لا", "لا شكرا", "مش هلأ", "مو هلق", "ما بدي", "مش موافق", "مو موافق"}:
+        return ConversationIntent.REJECTION
+    if t in {"اي", "ايوه", "ايوا", "نعم", "تمام", "اوكي", "صح", "اكيد", "موافق", "موافقه"}:
+        return ConversationIntent.CONFIRMATION
+    if re.search(r"(?:احسبي|احسب|كم يساوي|كم حاصل|calculate)", t) and re.search(
+            r"\d+(?:\.\d+)?\s*[-+*/%]\s*-?\d", text):
+        return ConversationIntent.CALCULATION
+    if re.search(r"(?:قصف|اقصفي|حمصي|roast)", t):
+        return ConversationIntent.ROAST
+    if t in {"عنجد", "متاكده", "متاكد", "شو قصدك", "كيف يعني"}:
+        return ConversationIntent.CLARIFICATION if not continued else ConversationIntent.FOLLOW_UP
     if re.search(r"(?:قصدك|تقصد|تقصدين|يعني انتِ|يعني انت)", t):
         return ConversationIntent.CLARIFICATION
     if re.search(r"ما فهمت|مش فاهم|مو فاهم|مش فاهمه|مو فاهمه", t):
@@ -255,11 +426,11 @@ def classify_intent(text: str, *, continued: bool = False) -> ConversationIntent
         return ConversationIntent.CLARIFICATION
     if t in {"ليش", "لماذا", "كيف", "شو", "ماذا", "ايش", "طيب شو", "طيب كيف"}:
         return ConversationIntent.CLARIFICATION
-    if re.search(r"\b(?:شكرا|مشكور|يسلمو|thanks|thank you)\b", t):
+    if re.search(r"(?:شكرا|مشكور|يسلمو|thanks|thank you)", t):
         return ConversationIntent.THANKS
     if re.search(r"(?:تصبح|تصبحي|باي|مع السلامه|الى اللقاء|bye|goodbye)", t):
         return ConversationIntent.GOODBYE
-    if re.search(r"(?:نكت|اضحكيني|قوليلنا نكته)", t):
+    if re.search(r"(?:نكت|اضحكيني|قوليلنا نكته|joke)", t):
         return ConversationIntent.JOKE
     if re.search(r"(?:شو رأيك|شو رايك|ما رأيك|ما رايك|برايك|تنصحيني|بتنصحي|recommend)", t):
         return ConversationIntent.OPINION_REQUEST
@@ -267,7 +438,7 @@ def classify_intent(text: str, *, continued: bool = False) -> ConversationIntent
         return ConversationIntent.EXPLANATION_REQUEST
     if re.search(r"(?:ساعديني|ساعدني|مساعده|مساعدة|عندي مشكله|عندي مشكلة|ممكن تساعد|بدي اسالك|بدي اسألك|عندي سؤال|اسمعي)", t):
         return ConversationIntent.HELP_REQUEST
-    if re.search(r"(?:مرحبا|مرحب|اهلا|هلا|هلو|هاي|hello|hi)\b", t):
+    if re.search(r"(?:مرحبا|مرحب|اهلا|هلا|هلو|هاي|hello|hi)", t):
         return ConversationIntent.GREETING
     if re.search(r"كيفك|كيف حالك|شو اخبارك|شو عامله|شو عاملة|وينك|شو عم تعملي|how are you|how.s it going", t):
         return ConversationIntent.SMALL_TALK
@@ -275,9 +446,17 @@ def classify_intent(text: str, *, continued: bool = False) -> ConversationIntent
         return ConversationIntent.EMOTIONAL_RESPONSE
     if re.search(r"(?:اشتقتلك|وحشتيني|شو عم تعملي|شو عم تعمل|كيف يومك|شو عاملين)", t):
         return ConversationIntent.CASUAL_CHAT
-    if re.search(r"\?|؟|\b(?:كيف|ليش|لماذا|متى|اين|وين|شو|ماذا|هل)\b", t):
+    if has_question or re.search(r"\b(?:كيف|ليش|لماذا|متى|اين|وين|شو|ماذا|هل|ليه|where|why|how|what|when)\b", t):
         return ConversationIntent.QUESTION
-    return ConversationIntent.REQUEST
+    if re.search(r"(?:بدي|اريد|ممكن|ساعديني|ساعدني|اعمل|اعطيني|احكيلي|خبريني|tell me|please)", t):
+        return ConversationIntent.REQUEST
+    if re.search(r"(?:هههه|😂|🤣|😄|😅|عنجد|يا لطيف)", str(text or "")):
+        return ConversationIntent.EMOTIONAL_RESPONSE
+    if previous_intent is not None or pending_question:
+        return ConversationIntent.GENERAL_CHAT
+    if len(t.split()) <= 2:
+        return ConversationIntent.UNKNOWN
+    return ConversationIntent.GENERAL_CHAT
 
 
 def is_existing_feature_command(text: str) -> bool:
@@ -288,8 +467,11 @@ def is_existing_feature_command(text: str) -> bool:
         "رتبتي", "نقاطي", "تفاعلي", "اكس او", "إكس أو", "xo", "نزلي", "حملي", "بدي غنية",
         "اغنية", "تحميل", "لارا احكي", "احكي", "طرد", "طردي", "اطردي", "كتم", "اكتمي", "فك الكتم",
         "فكي الكتم", "الغاء كتم", "تحذير", "حذري", "تثبيت", "ثبتي", "قفل المحادثة", "اقفلي",
-        "فتح المحادثة", "افتحي", "قفل الجروب", "فتح الجروب", "لارا طردي", "لارا اكتمي",
+        "فتح المحادثة", "افتحي", "قفل الجروب", "فتح الجروب", "حظر", "احظر", "الغاء الحظر", "إلغاء الحظر", "فك الحظر", "مسح",
+        "لارا طردي", "لارا اكتمي",
         "لارا حذري", "لارا اقفلي", "لارا فكي الكتم", "لارا ثبتي", "لارا افتحي",
+        "رفع ادمن", "ارفع ادمن", "تنزيل ادمن", "نزل ادمن", "رفع مميز", "ارفع مميز",
+        "تنزيل مميز", "نزل مميز", "ترقية مشرف", "تنزيل مشرف", "رفع مشرف", "عزل مشرف",
     )
     return any(t == normalize_invocation(item) or t.startswith(normalize_invocation(item) + " ")
                for item in protected)
@@ -315,15 +497,72 @@ def natural_fallback(query: str, intent: ConversationIntent, *, topic: str = "")
         return "ولا يهمك. أي جزء حسّيته مو واضح؟ بشرحه بطريقة أبسط."
     if intent == ConversationIntent.CLARIFICATION:
         return "أي نقطة تقصد؟ ذكّريني بالموضوع أو اكتبي سؤالك كامل وأنا أوضحه."
+    if intent == ConversationIntent.CORRECTION:
+        return "تمام، فهمت إنك تقصد شي مختلف. احكيلي شو قصدك الجديد وبمشي معك عليه."
+    if intent == ConversationIntent.CONFIRMATION:
+        return random.choice(["تمام 😊", "حلو، نكمل.", "تمام، معك."])
+    if intent == ConversationIntent.REJECTION:
+        return "ولا يهمك. إذا بتحب نغيّر الاتجاه، قلّي شو الأنسب إلك."
     if intent == ConversationIntent.FOLLOW_UP and topic:
-        return f"بالنسبة لـ«{topic[:100]}»، أي جزء بتحب نكمل فيه؟"
+        return f"بالنسبة لـ«{topic[:100]}»، {random.choice(['خليني أوضحها أكتر.', 'نكمل من هون.', 'شو الجزء اللي حابب تعرفه؟'])}"
     if intent == ConversationIntent.JOKE:
         return "بدك نكتة؟ اكتب «لارا نكتة» وبجيبلك وحدة من نكاتي 😄"
     if intent == ConversationIntent.EMOTIONAL_RESPONSE:
-        return "😄 أنا معك!"
+        return random.choice(["😄 أنا معك!", "😂 هون، سامعتك.", "😄 شو في؟"])
+    if intent == ConversationIntent.GENERAL_CHAT:
+        return "معك 😊 احكيلي أكتر عن اللي ببالك."
+    if intent == ConversationIntent.UNKNOWN:
+        return "أنا معك 😊 وضّحلي شو حابب تسأل أو تحكي."
+    if intent == ConversationIntent.CALCULATION:
+        return "اكتبلي العملية الحسابية بالأرقام والرموز، مثل 12 × 3."
+    if intent == ConversationIntent.ROAST:
+        return "إذا قصدك مزحة أو قصف خفيف، حدّدلي مين أو شو الموضوع 😄"
     if query:
         return f"ما لقيت جوابًا موثوقًا كفاية عن «{query[:120]}». فيك توضّحلي قصدك أو تعطيني تفاصيل أكثر؟"
     return "أنا هون معك 😊 شو حابب تسألني؟"
+
+
+_CALC_OPS = {
+    ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
+    ast.Div: operator.truediv, ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod, ast.Pow: operator.pow, ast.USub: operator.neg,
+    ast.UAdd: operator.pos,
+}
+
+
+def calculate_local_request(text: str) -> float | int | None:
+    """Evaluate a bounded arithmetic expression without eval or external services."""
+    match = re.search(
+        r"(?<![\w.])[-+]?\d+(?:\.\d+)?(?:\s*(?:\+|-|\*|/|//|%|\*\*)\s*[-+]?\d+(?:\.\d+)?)*(?![\w.])",
+        text,
+    )
+    if not match:
+        return None
+    try:
+        tree = ast.parse(match.group(0), mode="eval")
+
+        def visit(node):
+            if isinstance(node, ast.Expression):
+                return visit(node.body)
+            if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+                if abs(node.value) > 1_000_000:
+                    raise ValueError("number out of range")
+                return node.value
+            if isinstance(node, ast.BinOp) and type(node.op) in _CALC_OPS:
+                left, right = visit(node.left), visit(node.right)
+                if isinstance(node.op, ast.Pow) and abs(right) > 8:
+                    raise ValueError("exponent out of range")
+                result = _CALC_OPS[type(node.op)](left, right)
+                if abs(result) > 1_000_000_000:
+                    raise ValueError("result out of range")
+                return result
+            if isinstance(node, ast.UnaryOp) and type(node.op) in _CALC_OPS:
+                return _CALC_OPS[type(node.op)](visit(node.operand))
+            raise ValueError("unsupported expression")
+
+        return visit(tree)
+    except (SyntaxError, ArithmeticError, OverflowError, ValueError, ZeroDivisionError):
+        return None
 
 
 conversation_context = LaraConversationContext()

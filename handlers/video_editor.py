@@ -62,6 +62,11 @@ def _cancel_keyboard(job_id: str) -> InlineKeyboardMarkup:
 
 
 async def open_editor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.effective_chat or update.effective_chat.type != "private":
+        target = update.effective_message
+        if target:
+            await target.reply_text("🎬 محرر الفيديو متاح في المحادثة الخاصة مع Lara فقط.")
+        return
     query = update.callback_query
     if query:
         await query.answer()
@@ -72,7 +77,7 @@ async def open_editor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def _new_session(update: Update, context: ContextTypes.DEFAULT_TYPE) -> MediaSession:
     user, chat = update.effective_user, update.effective_chat
-    if not user or not chat:
+    if not user or not chat or chat.type != "private":
         raise RuntimeError("A private user/chat is required")
     existing_id = context.user_data.get("video_editor_job")
     if existing_id:
@@ -232,6 +237,8 @@ async def _execute(update: Update, context: ContextTypes.DEFAULT_TYPE, session: 
 async def handle_editor_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     user, chat = update.effective_user, update.effective_chat
+    if not chat or chat.type != "private":
+        return
     job_id = context.user_data.get("video_editor_job")
     if not message or not user or not chat or not job_id:
         return
@@ -284,6 +291,8 @@ async def handle_editor_media(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def handle_editor_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message, user, chat = update.effective_message, update.effective_user, update.effective_chat
+    if not chat or chat.type != "private":
+        return
     job_id = context.user_data.get("video_editor_job")
     if not message or not message.text or not user or not chat or not job_id:
         return
@@ -327,6 +336,9 @@ async def video_editor_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return
     data = query.data or ""
     await query.answer()
+    if update.effective_chat.type != "private":
+        await query.message.reply_text("🎬 محرر الفيديو متاح في المحادثة الخاصة فقط. افتح البوت واضغط Start.")
+        return
     if data == f"{CALLBACK_PREFIX}open":
         await query.message.reply_text("🎬 محرر الفيديو\n\nاختر قسمًا أو ابدأ جلسة تحرير:", reply_markup=editor_keyboard())
         return

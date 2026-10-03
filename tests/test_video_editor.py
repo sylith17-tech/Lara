@@ -3,11 +3,15 @@ from __future__ import annotations
 import asyncio
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 from services.intent import parse_edit_request, parse_natural_request, validate_model_plan
 from services.media_sessions import MediaSessionManager, SessionState
 from services.video_engine import MediaEngine
 from services.video_jobs import JobState, VideoJobManager
+from handlers.video_editor import _new_session
+from main_vip import handle_start_video_edit
 
 
 def _media(kind: str):
@@ -117,6 +121,32 @@ def test_engine_validates_operation_parameters_without_running_ffmpeg():
         assert "between" in str(exc)
     else:
         raise AssertionError("out-of-range values must be rejected")
+
+
+def test_video_editor_refuses_group_session_creation():
+    async def scenario():
+        update = SimpleNamespace(effective_user=SimpleNamespace(id=7),
+                                 effective_chat=SimpleNamespace(id=-100, type="supergroup"))
+        context = SimpleNamespace(user_data={})
+        try:
+            await _new_session(update, context)
+        except RuntimeError as exc:
+            assert "private" in str(exc).lower()
+        else:
+            raise AssertionError("group chat must not create a video session")
+    asyncio.run(scenario())
+
+
+def test_vip_video_workflow_refuses_group_callback():
+    async def scenario():
+        query = SimpleNamespace(answer=AsyncMock())
+        update = SimpleNamespace(callback_query=query,
+                                 effective_chat=SimpleNamespace(id=-100, type="group"))
+        context = SimpleNamespace(user_data={})
+        await handle_start_video_edit(update, context)
+        query.answer.assert_awaited_once_with("محرر الفيديو متاح في الخاص فقط.", show_alert=True)
+        assert not context.user_data
+    asyncio.run(scenario())
 
 
 def test_ffmpeg_trim_and_remove_audio_on_tiny_fixture(tmp_path: Path):

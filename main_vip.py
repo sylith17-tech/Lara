@@ -32,6 +32,10 @@ async def handle_vip_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_start_video_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """تهيئة جلسة العمل واستقبال الفيديو من المستخدم"""
     query = update.callback_query
+    if not update.effective_chat or update.effective_chat.type != "private":
+        if query:
+            await query.answer("محرر الفيديو متاح في الخاص فقط.", show_alert=True)
+        return
     await query.answer("🚀 تم إعداد جلسة العمل بنجاح!", show_alert=True)
     
     job_info = create_job_storage()
@@ -87,6 +91,8 @@ ACTIVE_AI_USERS = set()
 
 async def handle_incoming_video(update, context):
     """استقبال الفيديو وتفعيل حالة انتظار الوصف لهذا المستخدم فقط"""
+    if not update.effective_chat or update.effective_chat.type != "private":
+        return
     if not context.user_data.get('waiting_for_video'):
         return
 
@@ -110,6 +116,8 @@ async def handle_incoming_video(update, context):
 
 async def handle_ai_video_prompt(update, context):
     """استقبال الوصف النصي للمستخدم النشط فقط وتطبيق التعديل"""
+    if not update.effective_chat or update.effective_chat.type != "private":
+        return
     user_id = update.effective_user.id
     if user_id not in ACTIVE_AI_USERS:
         return  # تجاهل تاما لأي شخص لا يقوم بتعديل فيديو حالياً
@@ -169,6 +177,9 @@ WAIT_VIDEO, WAIT_PROMPT = range(2)
 async def video_edit_init(update, context):
     """بدء محادثة تعديل الفيديو عند الضغط على الزر"""
     query = update.callback_query
+    if not update.effective_chat or update.effective_chat.type != "private":
+        await query.answer("محرر الفيديو متاح في الخاص فقط.", show_alert=True)
+        return ConversationHandler.END
     await query.answer()
     await query.edit_message_text(
         "🎬 **قسم تعديل الفيديو بالذكاء الاصطناعي**\n\n"
@@ -180,6 +191,8 @@ async def video_edit_init(update, context):
 
 async def video_receive_file(update, context):
     """استقبال الفيديو من المستخدم والانتقال لطلب الوصف"""
+    if not update.effective_chat or update.effective_chat.type != "private":
+        return ConversationHandler.END
     message = update.message
     if not message.video:
         await message.reply_text("⚠️ يرجى إرسال ملف **فيديو** صالح، أو اكتب /cancel للإلغاء.")
@@ -197,6 +210,8 @@ async def video_receive_file(update, context):
 
 async def video_process_and_reply(update, context):
     """معالجة الفيديو عبر المحرك وإرسال النتيجة ثم إنهاء المحادثة"""
+    if not update.effective_chat or update.effective_chat.type != "private":
+        return ConversationHandler.END
     text_prompt = update.message.text
     video_file_id = context.user_data.get('temp_video_file_id')
     user_id = update.effective_user.id
