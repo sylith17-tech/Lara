@@ -1488,6 +1488,30 @@ CHANNEL_URL = "https://t.me/VIP_ARM0"
 async def is_subscribed(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     return await is_user_subscribed(user_id, context)
 
+
+def _group_message_requires_subscription(text: str) -> bool:
+    """Keep group chat out of the subscription gate unless Lara/features are invoked."""
+    from arsyra.conversation import detect_invocation, is_existing_feature_command
+
+    if detect_invocation(text) or is_existing_feature_command(text):
+        return True
+
+    # Legacy group features that predate the shared feature-command classifier.
+    normalized = " ".join(text.casefold().split())
+    group_feature_triggers = (
+        "مسح", "تنظيف الصور", "قفل الصور", "فتح الصور", "قفل الفيديو", "فتح الفيديو",
+        "قفل الروابط", "فتح الروابط", "قفل الملصقات", "فتح الملصقات",
+        "قفل الصوتيات", "فتح الصوتيات", "إعدادات المجموعة", "اعدادات المجموعة",
+        "لوحة مالك المجموعة", "تغيير رسالة الترحيب", "تغيير الرسالة الترحيبية",
+        "لارا اختراق", "اختراق", "لارا نسبة الحب", "لارا قصف", "قصف", "اقصفي",
+        "لارا نكتة", "نكتة", "نكت", "لارا نكت", "الاوامر", "الأوامر", "اوامر",
+        "قائمة الأوامر", "مساعدة", "لارا احكي", "احكي", "نزلي", "حملي",
+        "بدي غنية", "اغنية", "تحميل",
+    )
+    return any(normalized == trigger or normalized.startswith(trigger + " ")
+               for trigger in group_feature_triggers)
+
+
 async def send_sub_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = """⚠️ عذراً عزيزي، يجب عليك الاشتراك في قناة البوت أولاً لاستخدامه!
 
@@ -1575,7 +1599,8 @@ async def handle_owner_subs_callback(update: Update, context: ContextTypes.DEFAU
     await query.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 
-async def _run_group_custom_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+async def _run_group_custom_command(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                                   require_subscription: bool = False) -> bool:
     message, chat, actor = update.effective_message, update.effective_chat, update.effective_user
     if not message or not message.text or not chat or chat.type not in ("group", "supergroup") or not actor:
         return False
@@ -1589,6 +1614,9 @@ async def _run_group_custom_command(update: Update, context: ContextTypes.DEFAUL
                     or text.casefold().startswith(item.normalized_name + " ")), None)
     if command is None:
         return False
+    if require_subscription and not await is_subscribed(actor.id, context):
+        await send_sub_prompt(update, context)
+        return True
     if not command.enabled:
         await message.reply_text("⏸ هذا الأمر متوقف في هذه المجموعة.")
         return True
@@ -1720,9 +1748,18 @@ async def _is_exact_custom_command(chat_id: int, text: str) -> bool:
 
 async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id if update.effective_user else None
-    if user_id and not await is_subscribed(user_id, context):
+    message_text = update.message.text if update.message and update.message.text else ""
+    is_group_message = bool(update.effective_chat and
+                            update.effective_chat.type in ("group", "supergroup"))
+    should_check_subscription = bool(
+        user_id and (not is_group_message or _group_message_requires_subscription(message_text))
+    )
+    subscription_checked = False
+    if should_check_subscription and not await is_subscribed(user_id, context):
         await send_sub_prompt(update, context)
         return
+    if should_check_subscription:
+        subscription_checked = True
 
     if update.message and update.message.text in ["الاوامر", "/help", "الأوامر"]:
         text, reply_markup = await get_user_role_menu(update, context)
@@ -1986,7 +2023,7 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if await handle_owner_flow_message(update, context):
         return
-    if await _run_group_custom_command(update, context):
+    if await _run_group_custom_command(update, context, require_subscription=is_group):
         return
 
     admin_chat_bypass = [
@@ -2034,6 +2071,11 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_to_other=reply_to_other,
             )
             if decision.level == InvocationLevel.DIRECT_INVOCATION:
+                if user_id and not subscription_checked:
+                    if not await is_subscribed(user_id, context):
+                        await send_sub_prompt(update, context)
+                        return
+                    subscription_checked = True
                 query_ai = strip_invocation(text) if detect_invocation(text) else text.strip()
                 normalized_query = query_ai.lower().replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
                 response_text = None

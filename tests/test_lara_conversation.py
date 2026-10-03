@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -236,3 +239,122 @@ def test_group_dialogue_dispatch_remains_local_and_after_command_filters():
     assert "conversation_context.decide(" in source
     assert "MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg)" in source
     assert "openai_provider" not in source
+
+
+@pytest.mark.parametrize("text", ["مالك", "مالك شو الأخبار؟", "أنا عم بحكي مع مالك"])
+def test_ordinary_group_chat_does_not_call_subscription_check(text: str, monkeypatch):
+    import main
+
+    class EmptyResult:
+        def scalar_one_or_none(self):
+            return None
+
+    class EmptySession:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+        async def execute(self, statement):
+            return EmptyResult()
+
+    async def scenario():
+        monkeypatch.setattr(main, "is_subscribed", AsyncMock(return_value=False))
+        monkeypatch.setattr(main, "send_sub_prompt", AsyncMock())
+        monkeypatch.setattr(main, "async_session", EmptySession)
+        monkeypatch.setattr(main, "check_bad_words", AsyncMock(return_value=False))
+        monkeypatch.setattr(main, "handle_purge_commands", AsyncMock(return_value=False))
+        monkeypatch.setattr(main, "handle_lock_toggle_commands", AsyncMock(return_value=False))
+        monkeypatch.setattr(main, "check_media_locks", AsyncMock(return_value=False))
+        monkeypatch.setattr(main, "handle_owner_flow_message", AsyncMock(return_value=False))
+
+        class EmptyGroupStore:
+            async def get_settings(self, chat_id):
+                return None
+            async def list_commands(self, chat_id):
+                return []
+
+        monkeypatch.setattr(main, "group_feature_store", EmptyGroupStore())
+        message = SimpleNamespace(text=text, reply_to_message=None, message_id=1,
+                                  reply_text=AsyncMock())
+        update = SimpleNamespace(message=message, effective_message=message,
+            effective_chat=SimpleNamespace(id=-100, type="supergroup", title="Test"),
+            effective_user=SimpleNamespace(id=7, first_name="Member", username=None))
+        context = SimpleNamespace(user_data={}, bot=SimpleNamespace(id=0))
+        await main.handle_msg(update, context)
+        main.is_subscribed.assert_not_awaited()
+        main.send_sub_prompt.assert_not_awaited()
+
+    asyncio.run(scenario())
+
+
+def test_real_lara_invocation_still_enters_subscription_gate():
+    import main
+
+    assert main._group_message_requires_subscription("يا لارا شو الأخبار؟")
+
+
+def test_subscribed_lara_invocation_still_gets_a_conversation_reply(monkeypatch):
+    import main
+
+    class EmptyResult:
+        def scalar_one_or_none(self):
+            return None
+
+    class EmptySession:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+        async def execute(self, statement):
+            return EmptyResult()
+
+    async def scenario():
+        monkeypatch.setattr(main, "is_subscribed", AsyncMock(return_value=True))
+        monkeypatch.setattr(main, "send_sub_prompt", AsyncMock())
+        monkeypatch.setattr(main, "async_session", EmptySession)
+        monkeypatch.setattr(main, "check_bad_words", AsyncMock(return_value=False))
+        monkeypatch.setattr(main, "handle_purge_commands", AsyncMock(return_value=False))
+        monkeypatch.setattr(main, "handle_lock_toggle_commands", AsyncMock(return_value=False))
+        monkeypatch.setattr(main, "check_media_locks", AsyncMock(return_value=False))
+        monkeypatch.setattr(main, "handle_owner_flow_message", AsyncMock(return_value=False))
+
+        class EmptyGroupStore:
+            async def get_settings(self, chat_id):
+                return None
+            async def list_commands(self, chat_id):
+                return []
+
+        monkeypatch.setattr(main, "group_feature_store", EmptyGroupStore())
+        message = SimpleNamespace(text="يا لارا شو الأخبار؟", reply_to_message=None,
+                                  message_id=1, reply_text=AsyncMock(return_value=SimpleNamespace(message_id=2)))
+        update = SimpleNamespace(message=message, effective_message=message,
+            effective_chat=SimpleNamespace(id=-100, type="supergroup", title="Test"),
+            effective_user=SimpleNamespace(id=8, first_name="Member", username=None))
+        context = SimpleNamespace(user_data={}, bot=SimpleNamespace(id=0))
+        await main.handle_msg(update, context)
+        main.is_subscribed.assert_awaited_once_with(8, context)
+        message.reply_text.assert_awaited()
+        main.send_sub_prompt.assert_not_awaited()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("text", ["لارا نكتة", "مسح 3", "نزلي أغنية"])
+def test_subscription_gate_still_covers_protected_text_features(text: str):
+    import main
+
+    assert main._group_message_requires_subscription(text)
+
+
+def test_admin_custom_command_vip_and_video_routes_remain_registered():
+    root = Path(__file__).resolve().parents[1]
+    main = (root / "main.py").read_text(encoding="utf-8")
+    vip = (root / "main_vip.py").read_text(encoding="utf-8")
+    video = (root / "handlers/video_editor.py").read_text(encoding="utf-8")
+
+    assert "handle_purge_commands(update, context)" in main
+    assert "handle_lock_toggle_commands(update, context)" in main
+    assert "_run_group_custom_command(update, context, require_subscription=is_group)" in main
+    assert 'callback_data="vip_menu"' in main and "handle_vip_menu(update, context)" in main
+    assert 'pattern="^btn_video_edit$"' in main
+    assert 'update.effective_chat.type != "private"' in video
