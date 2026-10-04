@@ -2111,6 +2111,8 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=speech_text,
             )
             return
+        except Exception:
+            return await update.message.reply_text(f"🗣️ **لارا تقول:** {speech_text}")
 
     # 7. تنزيل الأغاني الموسيقية
     music_request = _parse_youtube_download_request(text)
