@@ -2097,15 +2097,20 @@ async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         speech_text = text.replace("لارا احكي", "").replace("احكي", "").strip()
         if not speech_text: return await update.message.reply_text("🗣️ اكتب النص بعد الأمر.")
         try:
-            from gtts import gTTS
-            tts_path = f"/tmp/tts_{update.message.message_id}.mp3"
-            gTTS(text=speech_text, lang='ar').save(tts_path)
-            with open(tts_path, 'rb') as v_file:
-                await context.bot.send_voice(chat_id=chat_id, voice=v_file, reply_to_message_id=update.message.message_id)
-            if os.path.exists(tts_path): os.remove(tts_path)
+            from services.speech import MAX_SPEECH_CHARS, prepare_speech_text, send_speech_or_text_fallback
+            if len(speech_text) > MAX_SPEECH_CHARS:
+                return await update.message.reply_text("🗣️ النص طويل جدًا لتحويله إلى صوت؛ اختصره وحاول مرة أخرى.")
+            prepared_text = prepare_speech_text(speech_text)
+            if not prepared_text: return await update.message.reply_text("🗣️ اكتب النص بعد الأمر.")
+            if len(prepared_text) > MAX_SPEECH_CHARS:
+                return await update.message.reply_text("🗣️ النص طويل جدًا لتحويله إلى صوت؛ اختصره وحاول مرة أخرى.")
+            await send_speech_or_text_fallback(
+                context.bot,
+                update.message,
+                chat_id=chat_id,
+                text=speech_text,
+            )
             return
-        except Exception:
-            return await update.message.reply_text(f"🗣️ **لارا تقول:** {speech_text}")
 
     # 7. تنزيل الأغاني الموسيقية
     music_request = _parse_youtube_download_request(text)

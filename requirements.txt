@@ -6,7 +6,7 @@ psycopg2-binary
 yt-dlp
 static-ffmpeg
 psutil
-gTTS
+piper-tts==1.8.0
 requests
 Flask
 opencv-python-headless
