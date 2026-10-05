@@ -124,8 +124,6 @@ def _convert_to_telegram_voice(mp3_path: Path, ogg_path: Path) -> None:
         "-i",
         str(mp3_path),
         "-af",
-        "silenceremove=start_periods=1:start_threshold=-48dB:start_silence=0.08:"
-        "stop_periods=1:stop_threshold=-48dB:stop_silence=0.18,"
         "loudnorm=I=-18:TP=-2:LRA=9",
         "-ar",
         "24000",
