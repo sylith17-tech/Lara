@@ -6,7 +6,6 @@ psycopg2-binary
 yt-dlp
 static-ffmpeg
 psutil
-piper-tts==1.8.0
 requests
 Flask
 opencv-python-headless
@@ -14,3 +13,4 @@ Pillow
 moviepy
 rapidfuzz>=3.0,<4
 greenlet
+edge-tts
